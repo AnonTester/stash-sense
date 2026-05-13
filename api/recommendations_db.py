@@ -559,7 +559,12 @@ class RecommendationsDB:
             query += " AND target_type = ?"
             params.append(target_type)
 
-        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        # Duplicate scene recommendations are reviewed primarily by confidence.
+        # Keep this ordering stable across pending/resolved/dismissed groups.
+        if type == "duplicate_scenes":
+            query += " ORDER BY COALESCE(confidence, 0) DESC, created_at DESC, id DESC LIMIT ? OFFSET ?"
+        else:
+            query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
 
         with self._connection() as conn:
