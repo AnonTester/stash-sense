@@ -3452,6 +3452,21 @@ a.ss-upstream-endpoint-badge:hover {
   color: var(--bs-body-color, #fff);
 }
 
+.ss-fp-scene-title {
+  margin: 0 0 0.6rem 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ss-fp-scene-title a {
+  color: var(--bs-body-color, #fff);
+  text-decoration: none;
+}
+
+.ss-fp-scene-title a:hover {
+  color: var(--bs-primary, #0d6efd);
+}
+
 .ss-fp-detail-divider {
   width: 2px;
   background: var(--bs-border-color, #333);

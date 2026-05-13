@@ -1334,7 +1334,7 @@
     } else if (rec.type === 'upstream_scene_changes') {
       await renderUpstreamSceneDetail(content, rec);
     } else if (rec.type === 'scene_fingerprint_match') {
-      renderFingerprintMatchDetail(content, rec);
+      await renderFingerprintMatchDetail(content, rec);
     } else {
       content.innerHTML = `<p>Unknown recommendation type: ${escapeHtml(rec.type)}</p>`;
     }
@@ -4146,9 +4146,25 @@
     return `${m}:${s.toString().padStart(2, '0')}`;
   }
 
-  function renderFingerprintMatchDetail(container, rec) {
+  async function renderFingerprintMatchDetail(container, rec) {
     const d = rec.details;
     const isPending = rec.status === 'pending';
+    const localSceneId = String(d.local_scene_id || '');
+    const localSceneHref = `/scenes/${localSceneId}`;
+    const stashboxSceneHref = `${String(d.endpoint || '').replace(/\/graphql$/, '')}/scenes/${d.stashbox_scene_id}`;
+
+    container.innerHTML = '<div class="ss-loading">Loading scene details...</div>';
+
+    let localScene = null;
+    try {
+      if (localSceneId) {
+        localScene = await RecommendationsAPI.getSceneDetail(localSceneId);
+      }
+    } catch (_) {}
+
+    const localScreenshotUrl = relativeUrl(localScene?.paths?.screenshot);
+    const localPreviewUrl = relativeUrl(localScene?.paths?.preview);
+    const stashboxCoverUrl = d.stashbox_cover_url;
 
     container.innerHTML = `
       <div class="ss-fp-detail">
@@ -4162,19 +4178,42 @@
         <div class="ss-fp-detail-comparison">
           <div class="ss-fp-detail-side">
             <h4>Local Scene</h4>
-            <div class="ss-fp-field"><strong>Title:</strong> ${escapeHtml(d.local_scene_title || 'Unknown')}</div>
+            <div class="ss-dup-scene-thumb ss-fp-local-thumb">
+              ${localScreenshotUrl
+                ? `<img src="${localScreenshotUrl}" alt="Local scene screenshot" loading="lazy" onerror="this.style.display='none'" />`
+                : '<div class="ss-no-image">No Screenshot</div>'
+              }
+              ${localPreviewUrl
+                ? `<video class="ss-dup-scene-preview ss-fp-scene-preview" muted loop preload="none" data-src="${localPreviewUrl}"></video>`
+                : ''
+              }
+            </div>
+            <div class="ss-fp-scene-title">
+              <a href="${escapeHtml(localSceneHref)}" target="_blank" rel="noopener">${escapeHtml(d.local_scene_title || 'Unknown')}</a>
+            </div>
             <div class="ss-fp-field"><strong>Duration:</strong> ${d.duration_local ? formatDuration(d.duration_local) : 'N/A'}</div>
             <div class="ss-fp-field"><strong>Fingerprints:</strong> ${d.total_local_fingerprints}</div>
           </div>
           <div class="ss-fp-detail-divider"></div>
           <div class="ss-fp-detail-side">
             <h4>Stash-Box Match</h4>
-            <div class="ss-fp-field"><strong>Title:</strong> ${escapeHtml(d.stashbox_scene_title || 'Unknown')}</div>
+            <div class="ss-dup-scene-thumb ss-fp-cover-thumb">
+              ${stashboxCoverUrl
+                ? `<img src="${escapeHtml(stashboxCoverUrl)}" alt="Stash-Box scene cover" loading="lazy" onerror="this.style.display='none'" />`
+                : '<div class="ss-no-image">No Cover</div>'
+              }
+            </div>
+            <div class="ss-fp-scene-title">
+              <a href="${escapeHtml(stashboxSceneHref)}" target="_blank" rel="noopener">${escapeHtml(d.stashbox_scene_title || 'Unknown')}</a>
+            </div>
             ${d.stashbox_studio ? `<div class="ss-fp-field"><strong>Studio:</strong> ${escapeHtml(d.stashbox_studio)}</div>` : ''}
             ${d.stashbox_performers?.length ? `<div class="ss-fp-field"><strong>Performers:</strong> ${d.stashbox_performers.map(escapeHtml).join(', ')}</div>` : ''}
             ${d.stashbox_date ? `<div class="ss-fp-field"><strong>Date:</strong> ${d.stashbox_date}</div>` : ''}
             <div class="ss-fp-field"><strong>Duration:</strong> ${d.duration_remote ? formatDuration(d.duration_remote) : 'N/A'}</div>
-            <div class="ss-fp-field"><strong>Endpoint:</strong> ${escapeHtml(d.endpoint_name || d.endpoint)}</div>
+            <div class="ss-fp-field">
+              <strong>Endpoint:</strong>
+              <a href="${escapeHtml(stashboxSceneHref)}" target="_blank" rel="noopener">${escapeHtml(d.endpoint_name || d.endpoint)}</a>
+            </div>
           </div>
         </div>
 
@@ -4222,6 +4261,30 @@
         `}
       </div>
     `;
+
+    // Local preview video on hover (same behavior as duplicate scenes)
+    const localThumb = container.querySelector('.ss-fp-local-thumb');
+    if (localThumb) {
+      const video = localThumb.querySelector('.ss-fp-scene-preview');
+      const img = localThumb.querySelector('img');
+      if (video) {
+        localThumb.addEventListener('mouseenter', () => {
+          if (!video.src && video.dataset.src) {
+            video.src = video.dataset.src;
+          }
+          if (img) img.style.opacity = '0';
+          video.style.opacity = '1';
+          video.play().catch(() => {});
+        });
+
+        localThumb.addEventListener('mouseleave', () => {
+          video.pause();
+          if (img) img.style.opacity = '1';
+          video.style.opacity = '0';
+          setTimeout(() => { video.currentTime = 0; }, 200);
+        });
+      }
+    }
 
     if (!isPending) return;
 
