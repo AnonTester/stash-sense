@@ -45,6 +45,15 @@
   let settingsData = null;
   let systemInfo = null;
   let saveTimeouts = {};
+  const UPSTREAM_GENDER_SETTINGS = [
+    { key: 'upstream_scene_gender_female_enabled', label: 'Female' },
+    { key: 'upstream_scene_gender_male_enabled', label: 'Male' },
+    { key: 'upstream_scene_gender_transgender_female_enabled', label: 'Transgender Female' },
+    { key: 'upstream_scene_gender_transgender_male_enabled', label: 'Transgender Male' },
+    { key: 'upstream_scene_gender_intersex_enabled', label: 'Intersex' },
+    { key: 'upstream_scene_gender_non_binary_enabled', label: 'Non-Binary' },
+    { key: 'upstream_scene_gender_unknown_enabled', label: 'Unknown' },
+  ];
 
   // ==================== Rendering ====================
 
@@ -107,6 +116,7 @@
         .sort((a, b) => (a[1].order || 0) - (b[1].order || 0));
 
       for (const [catKey, cat] of cats) {
+        if (catKey === 'upstream_sync') continue;
         container.appendChild(renderCategory(catKey, cat));
       }
     }
@@ -861,6 +871,49 @@
 
   // ==================== Upstream Sync Settings ====================
 
+  function getUpstreamGenderSettingValue(settingKey) {
+    return settingsData?.categories?.upstream_sync?.settings?.[settingKey]?.value ?? true;
+  }
+
+  function renderPerformerGenderSettingsRow() {
+    const row = SS.createElement('div', { className: 'ss-setting-row-vertical' });
+
+    const heading = SS.createElement('div', {
+      className: 'ss-upstream-subheading',
+      textContent: 'Performer genders',
+    });
+    row.appendChild(heading);
+
+    const hint = SS.createElement('div', {
+      className: 'ss-setting-hint',
+      textContent: 'Only selected genders are considered for upstream scene performer additions, removals, and alias changes.',
+    });
+    row.appendChild(hint);
+
+    const fieldsGrid = SS.createElement('div', {
+      className: 'ss-upstream-fields-grid',
+      attrs: { style: 'margin-top:10px;' },
+    });
+
+    for (const setting of UPSTREAM_GENDER_SETTINGS) {
+      const label = SS.createElement('label', { className: 'ss-upstream-field-label' });
+      const cb = SS.createElement('input', { attrs: { type: 'checkbox' } });
+      cb.checked = !!getUpstreamGenderSettingValue(setting.key);
+      cb.addEventListener('change', () => {
+        if (settingsData?.categories?.upstream_sync?.settings?.[setting.key]) {
+          settingsData.categories.upstream_sync.settings[setting.key].value = cb.checked;
+        }
+        debouncedSave(setting.key, cb.checked, row);
+      });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(' ' + setting.label));
+      fieldsGrid.appendChild(label);
+    }
+
+    row.appendChild(fieldsGrid);
+    return row;
+  }
+
   async function renderUpstreamSyncCategory() {
     const section = SS.createElement('div', { className: 'ss-settings-category' });
 
@@ -871,6 +924,7 @@
     section.appendChild(header);
 
     const body = SS.createElement('div', { className: 'ss-settings-cat-body' });
+    body.appendChild(renderPerformerGenderSettingsRow());
 
     const loadingRow = SS.createElement('div', {
       className: 'ss-setting-row ss-setting-hint',

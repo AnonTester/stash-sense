@@ -10,6 +10,7 @@ from typing import Optional
 
 from .base_upstream import BaseUpstreamAnalyzer
 from config import get_stashbox_shortname
+from settings import get_setting
 from upstream_field_mapper import (
     normalize_upstream_scene,
     diff_scene_fields,
@@ -18,6 +19,32 @@ from upstream_field_mapper import (
 )
 
 logger = logging.getLogger(__name__)
+
+GENDER_SETTING_KEY_BY_CANONICAL: dict[str, str] = {
+    "FEMALE": "upstream_scene_gender_female_enabled",
+    "MALE": "upstream_scene_gender_male_enabled",
+    "TRANSGENDER_FEMALE": "upstream_scene_gender_transgender_female_enabled",
+    "TRANSGENDER_MALE": "upstream_scene_gender_transgender_male_enabled",
+    "INTERSEX": "upstream_scene_gender_intersex_enabled",
+    "NON_BINARY": "upstream_scene_gender_non_binary_enabled",
+    "UNKNOWN": "upstream_scene_gender_unknown_enabled",
+}
+
+
+def _normalize_performer_gender(gender: Optional[str]) -> Optional[str]:
+    """Normalize performer gender values to canonical enum strings."""
+    if not gender:
+        return None
+
+    normalized = str(gender).strip().upper().replace("-", "_").replace(" ", "_")
+
+    aliases = {
+        "NONBINARY": "NON_BINARY",
+        "TRANS_FEMALE": "TRANSGENDER_FEMALE",
+        "TRANS_MALE": "TRANSGENDER_MALE",
+        "UNSPECIFIED": "UNKNOWN",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _has_scene_changes(result: dict) -> bool:
@@ -124,7 +151,12 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
                     perf_stash_id = sid["stash_id"]
                     break
             if perf_stash_id:
-                performers.append({"id": perf_stash_id, "name": p.get("name"), "as": None})
+                performers.append({
+                    "id": perf_stash_id,
+                    "name": p.get("name"),
+                    "gender": p.get("gender"),
+                    "as": None,
+                })
 
         tags = []
         for t in (entity.get("tags") or []):
@@ -180,9 +212,55 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
         The _build_recommendation_details override handles the dict format.
         """
         result = diff_scene_fields(local_data, upstream_data, snapshot, enabled_fields)
+        result["performer_changes"] = self._filter_performer_changes_by_gender(
+            result.get("performer_changes")
+        )
         if not _has_scene_changes(result):
             return []
         return result
+
+    def _get_selected_performer_genders(self) -> set[str]:
+        """Resolve enabled performer genders from settings."""
+        selected: set[str] = set()
+        for canonical, setting_key in GENDER_SETTING_KEY_BY_CANONICAL.items():
+            try:
+                enabled = bool(get_setting(setting_key))
+            except Exception:
+                # Settings system unavailable in isolated tests: keep defaults enabled.
+                enabled = True
+            if enabled:
+                selected.add(canonical)
+        return selected
+
+    def _performer_gender_is_selected(self, performer: dict, selected: set[str]) -> bool:
+        """Return True when performer gender is included by user selection."""
+        gender = _normalize_performer_gender(performer.get("gender"))
+        if not gender:
+            gender = "UNKNOWN"
+        if gender not in GENDER_SETTING_KEY_BY_CANONICAL:
+            gender = "UNKNOWN"
+        return gender in selected
+
+    def _filter_performer_changes_by_gender(self, performer_changes: Optional[dict]) -> dict:
+        """Filter performer added/removed/alias changes by selected genders."""
+        if not performer_changes:
+            return {"added": [], "removed": [], "alias_changed": []}
+
+        selected = self._get_selected_performer_genders()
+        return {
+            "added": [
+                p for p in performer_changes.get("added", [])
+                if self._performer_gender_is_selected(p, selected)
+            ],
+            "removed": [
+                p for p in performer_changes.get("removed", [])
+                if self._performer_gender_is_selected(p, selected)
+            ],
+            "alias_changed": [
+                p for p in performer_changes.get("alias_changed", [])
+                if self._performer_gender_is_selected(p, selected)
+            ],
+        }
 
     def _build_recommendation_details(
         self,

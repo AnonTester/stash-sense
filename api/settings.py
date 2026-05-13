@@ -54,6 +54,7 @@ CATEGORIES = {
     "rate_limits": {"label": "Rate Limits", "order": 1},
     "recognition": {"label": "Recognition", "order": 2},
     "signals": {"label": "Signals", "order": 3},
+    "upstream_sync": {"label": "Upstream Sync", "order": 4},
 }
 
 
@@ -116,6 +117,35 @@ _define("body_signal_enabled", "Body Proportions",
 _define("tattoo_signal_enabled", "Tattoo Detection",
         "Use tattoo detection as a supplementary identification signal (requires model)",
         "signals", SettingType.BOOL, fallback=False)
+
+# -- Upstream Sync --
+_define("upstream_scene_gender_female_enabled", "Female",
+        "Include female performers when detecting upstream scene performer changes",
+        "upstream_sync", SettingType.BOOL, fallback=True)
+
+_define("upstream_scene_gender_male_enabled", "Male",
+        "Include male performers when detecting upstream scene performer changes",
+        "upstream_sync", SettingType.BOOL, fallback=True)
+
+_define("upstream_scene_gender_transgender_female_enabled", "Transgender Female",
+        "Include transgender female performers when detecting upstream scene performer changes",
+        "upstream_sync", SettingType.BOOL, fallback=True)
+
+_define("upstream_scene_gender_transgender_male_enabled", "Transgender Male",
+        "Include transgender male performers when detecting upstream scene performer changes",
+        "upstream_sync", SettingType.BOOL, fallback=True)
+
+_define("upstream_scene_gender_intersex_enabled", "Intersex",
+        "Include intersex performers when detecting upstream scene performer changes",
+        "upstream_sync", SettingType.BOOL, fallback=True)
+
+_define("upstream_scene_gender_non_binary_enabled", "Non-Binary",
+        "Include non-binary performers when detecting upstream scene performer changes",
+        "upstream_sync", SettingType.BOOL, fallback=True)
+
+_define("upstream_scene_gender_unknown_enabled", "Unknown",
+        "Include performers with unknown or missing gender when detecting upstream scene performer changes",
+        "upstream_sync", SettingType.BOOL, fallback=True)
 
 
 # ============================================================================

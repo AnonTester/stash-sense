@@ -85,7 +85,7 @@ SCENE_FIELDS = """
     urls { url site { name } }
     studio { id name }
     tags { id name }
-    performers { performer { id name } as }
+    performers { performer { id name gender } as }
     director
     code
     deleted

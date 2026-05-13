@@ -2774,6 +2774,12 @@ a.ss-upstream-endpoint-badge:hover {
   margin-top: 10px;
 }
 
+.ss-upstream-subheading {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bs-body-color, #fff);
+}
+
 /* Toggle Switch */
 .ss-toggle {
   position: relative;

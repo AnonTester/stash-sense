@@ -172,8 +172,8 @@ class TestSceneFieldMapper:
         result = normalize_upstream_scene(upstream)
         assert result["studio"] == {"id": "studio-1", "name": "Studio A"}
         assert len(result["performers"]) == 2
-        assert result["performers"][0] == {"id": "perf-1", "name": "Jane", "as": "Jane Smith"}
-        assert result["performers"][1] == {"id": "perf-2", "name": "John", "as": None}
+        assert result["performers"][0] == {"id": "perf-1", "name": "Jane", "gender": None, "as": "Jane Smith"}
+        assert result["performers"][1] == {"id": "perf-2", "name": "John", "gender": None, "as": None}
         assert len(result["tags"]) == 2
         assert result["tags"][0] == {"id": "tag-1", "name": "HD"}
 
@@ -373,6 +373,158 @@ class TestUpstreamSceneAnalyzer:
         recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
         assert len(recs) == 1
         assert len(recs[0].details["performer_changes"]["added"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_filters_unselected_performer_genders(self, mock_stash, rec_db):
+        """Performer add/remove/alias changes are filtered by selected genders."""
+        mock_stash.get_scenes_for_endpoint = AsyncMock(return_value=[
+            {
+                "id": "1",
+                "title": "Local Title",
+                "date": "2025-01-01",
+                "details": "",
+                "director": "",
+                "code": "",
+                "urls": [],
+                "studio": None,
+                "performers": [
+                    {
+                        "id": "20",
+                        "name": "Male Existing",
+                        "gender": "MALE",
+                        "stash_ids": [{"endpoint": "https://stashdb.org/graphql", "stash_id": "perf-male-existing"}],
+                    },
+                    {
+                        "id": "21",
+                        "name": "Female Existing",
+                        "gender": "FEMALE",
+                        "stash_ids": [{"endpoint": "https://stashdb.org/graphql", "stash_id": "perf-female-existing"}],
+                    },
+                ],
+                "tags": [],
+                "stash_ids": [
+                    {"endpoint": "https://stashdb.org/graphql", "stash_id": "sb-scene-1"}
+                ],
+            }
+        ])
+
+        upstream_data = {
+            "title": "Local Title",
+            "details": "",
+            "date": "2025-01-01",
+            "director": "",
+            "code": "",
+            "urls": [],
+            "studio": None,
+            "tags": [],
+            "performers": [
+                # Male existing performer removed from upstream (should be filtered out)
+                {"performer": {"id": "perf-female-existing", "name": "Female Existing", "gender": "FEMALE"}, "as": "F Alias"},
+                # Male performer added upstream (should be filtered out)
+                {"performer": {"id": "perf-male-new", "name": "Male New", "gender": "MALE"}, "as": None},
+                # Female performer added upstream (should remain)
+                {"performer": {"id": "perf-female-new", "name": "Female New", "gender": "FEMALE"}, "as": None},
+            ],
+            "deleted": False,
+            "updated": "2025-01-15T00:00:00Z",
+        }
+
+        def _gender_setting_value(key: str):
+            if key == "upstream_scene_gender_male_enabled":
+                return False
+            return True
+
+        with patch("stashbox_client.StashBoxClient") as MockSBC, \
+                patch("analyzers.upstream_scene.get_setting", side_effect=_gender_setting_value):
+            mock_sbc = MagicMock()
+            mock_sbc.get_scene = AsyncMock(return_value=upstream_data)
+            MockSBC.return_value = mock_sbc
+
+            from analyzers.upstream_scene import UpstreamSceneAnalyzer
+            analyzer = UpstreamSceneAnalyzer(mock_stash, rec_db)
+            await analyzer.run()
+
+        recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
+        assert len(recs) == 1
+        perf_changes = recs[0].details["performer_changes"]
+
+        assert [p["id"] for p in perf_changes["added"]] == ["perf-female-new"]
+        assert perf_changes["removed"] == []
+        assert [p["id"] for p in perf_changes["alias_changed"]] == ["perf-female-existing"]
+
+    @pytest.mark.asyncio
+    async def test_ignores_rec_when_only_unselected_gender_changes(self, mock_stash, rec_db):
+        """No recommendation is created when all performer changes are filtered out."""
+        upstream_data = {
+            "title": "Local Title",
+            "details": "",
+            "date": "2025-01-01",
+            "director": "",
+            "code": "",
+            "urls": [],
+            "studio": None,
+            "tags": [],
+            "performers": [
+                {"performer": {"id": "perf-male-1", "name": "Male Added", "gender": "MALE"}, "as": None}
+            ],
+            "deleted": False,
+            "updated": "2025-01-15T00:00:00Z",
+        }
+
+        def _gender_setting_value(key: str):
+            if key == "upstream_scene_gender_male_enabled":
+                return False
+            return True
+
+        with patch("stashbox_client.StashBoxClient") as MockSBC, \
+                patch("analyzers.upstream_scene.get_setting", side_effect=_gender_setting_value):
+            mock_sbc = MagicMock()
+            mock_sbc.get_scene = AsyncMock(return_value=upstream_data)
+            MockSBC.return_value = mock_sbc
+
+            from analyzers.upstream_scene import UpstreamSceneAnalyzer
+            analyzer = UpstreamSceneAnalyzer(mock_stash, rec_db)
+            await analyzer.run()
+
+        recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
+        assert len(recs) == 0
+
+    @pytest.mark.asyncio
+    async def test_unknown_gender_respects_unknown_setting(self, mock_stash, rec_db):
+        """Unknown/missing performer gender is controlled by the Unknown checkbox."""
+        upstream_data = {
+            "title": "Local Title",
+            "details": "",
+            "date": "2025-01-01",
+            "director": "",
+            "code": "",
+            "urls": [],
+            "studio": None,
+            "tags": [],
+            "performers": [
+                {"performer": {"id": "perf-unknown-1", "name": "Unknown Added"}, "as": None}
+            ],
+            "deleted": False,
+            "updated": "2025-01-15T00:00:00Z",
+        }
+
+        def _gender_setting_value(key: str):
+            if key == "upstream_scene_gender_unknown_enabled":
+                return False
+            return True
+
+        with patch("stashbox_client.StashBoxClient") as MockSBC, \
+                patch("analyzers.upstream_scene.get_setting", side_effect=_gender_setting_value):
+            mock_sbc = MagicMock()
+            mock_sbc.get_scene = AsyncMock(return_value=upstream_data)
+            MockSBC.return_value = mock_sbc
+
+            from analyzers.upstream_scene import UpstreamSceneAnalyzer
+            analyzer = UpstreamSceneAnalyzer(mock_stash, rec_db)
+            await analyzer.run()
+
+        recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
+        assert len(recs) == 0
 
     @pytest.mark.asyncio
     async def test_build_local_data_filters_stash_ids_by_endpoint(self, rec_db):

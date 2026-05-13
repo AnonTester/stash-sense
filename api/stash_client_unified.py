@@ -438,6 +438,7 @@ class StashClientUnified:
               performers {
                 id
                 name
+                gender
                 stash_ids {
                   endpoint
                   stash_id
