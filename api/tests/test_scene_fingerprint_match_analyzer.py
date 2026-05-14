@@ -104,7 +104,7 @@ class TestAnalyzerRun:
 
     @pytest.mark.asyncio
     async def test_skips_scene_already_linked_to_endpoint(self):
-        """Scene with existing stash_id for this endpoint should be skipped."""
+        """Scene with any existing stash_id should be skipped."""
         db = make_mock_db()
         stash = make_mock_stash()
 
@@ -112,6 +112,31 @@ class TestAnalyzerRun:
             [make_scene("42", "My Scene",
                 [{"type": "md5", "value": "abc123"}],
                 stash_ids=[{"endpoint": "https://stashdb.org/graphql", "stash_id": "existing-uuid"}],
+            )],
+            1,
+        )
+
+        with patch("analyzers.scene_fingerprint_match.StashBoxClient") as MockSBC:
+            mock_sbc = AsyncMock()
+            mock_sbc.find_scenes_by_fingerprints.return_value = [[]]
+            MockSBC.return_value = mock_sbc
+
+            analyzer = SceneFingerprintMatchAnalyzer(stash, db)
+            result = await analyzer.run(incremental=False)
+
+        assert result.recommendations_created == 0
+        mock_sbc.find_scenes_by_fingerprints.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_scene_linked_to_different_endpoint(self):
+        """Scene linked to another endpoint is still skipped (must be fully unlinked)."""
+        db = make_mock_db()
+        stash = make_mock_stash()
+
+        stash.get_scenes_with_fingerprints.return_value = (
+            [make_scene("42", "My Scene",
+                [{"type": "md5", "value": "abc123"}],
+                stash_ids=[{"endpoint": "https://fansdb.cc/graphql", "stash_id": "fansdb-uuid"}],
             )],
             1,
         )
@@ -211,6 +236,7 @@ class TestAcceptAction:
     async def test_accept_adds_stash_id_to_scene(self):
         """Accepting a match should add the stash_id to the local scene."""
         from recommendations_router import _accept_fingerprint_match
+        from recommendations_db import Recommendation
 
         mock_stash = AsyncMock()
         mock_stash.get_scene_by_id.return_value = {
@@ -222,6 +248,15 @@ class TestAcceptAction:
         mock_stash.update_scene.return_value = {"id": "42"}
 
         mock_db = MagicMock()
+        mock_db.get_recommendation.return_value = Recommendation(
+            id=1, type="scene_fingerprint_match", status="pending",
+            target_type="scene", target_id="42|https://stashdb.org/graphql|sb-uuid-1",
+            details={"local_scene_id": "42"},
+            resolution_action=None, resolution_details=None, resolved_at=None,
+            confidence=0.67, source_analysis_id=None,
+            created_at="2026-01-01", updated_at="2026-01-01",
+        )
+        mock_db.get_recommendations.return_value = []
         mock_db.resolve_recommendation.return_value = True
 
         await _accept_fingerprint_match(
@@ -241,6 +276,63 @@ class TestAcceptAction:
 
         # Verify recommendation was resolved
         mock_db.resolve_recommendation.assert_called_once_with(1, action="accepted")
+        mock_db.dismiss_recommendation.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_accept_dismisses_other_pending_matches_for_same_scene(self):
+        """Accepting one match dismisses sibling pending matches for the same local scene."""
+        from recommendations_router import _accept_fingerprint_match
+        from recommendations_db import Recommendation
+
+        accepted_rec = Recommendation(
+            id=1, type="scene_fingerprint_match", status="pending",
+            target_type="scene", target_id="42|https://stashdb.org/graphql|sb-1",
+            details={"local_scene_id": "42"},
+            resolution_action=None, resolution_details=None, resolved_at=None,
+            confidence=0.8, source_analysis_id=None,
+            created_at="2026-01-01", updated_at="2026-01-01",
+        )
+        sibling_same_scene = Recommendation(
+            id=2, type="scene_fingerprint_match", status="pending",
+            target_type="scene", target_id="42|https://stashdb.org/graphql|sb-2",
+            details={"local_scene_id": "42"},
+            resolution_action=None, resolution_details=None, resolved_at=None,
+            confidence=0.6, source_analysis_id=None,
+            created_at="2026-01-01", updated_at="2026-01-01",
+        )
+        sibling_other_scene = Recommendation(
+            id=3, type="scene_fingerprint_match", status="pending",
+            target_type="scene", target_id="43|https://stashdb.org/graphql|sb-3",
+            details={"local_scene_id": "43"},
+            resolution_action=None, resolution_details=None, resolved_at=None,
+            confidence=0.6, source_analysis_id=None,
+            created_at="2026-01-01", updated_at="2026-01-01",
+        )
+
+        mock_stash = AsyncMock()
+        mock_stash.get_scene_by_id.return_value = {"id": "42", "stash_ids": []}
+        mock_stash.update_scene.return_value = {"id": "42"}
+
+        mock_db = MagicMock()
+        mock_db.get_recommendation.return_value = accepted_rec
+        mock_db.get_recommendations.return_value = [sibling_same_scene, sibling_other_scene]
+        mock_db.resolve_recommendation.return_value = True
+        mock_db.dismiss_recommendation.return_value = True
+
+        await _accept_fingerprint_match(
+            stash=mock_stash,
+            db=mock_db,
+            rec_id=1,
+            scene_id="42",
+            endpoint="https://stashdb.org/graphql",
+            stash_id="sb-1",
+        )
+
+        mock_db.resolve_recommendation.assert_called_once_with(1, action="accepted")
+        mock_db.dismiss_recommendation.assert_called_once()
+        dismiss_call = mock_db.dismiss_recommendation.call_args
+        assert dismiss_call[0][0] == 2
+        assert "Auto-dismissed after accepting scene fingerprint match" in dismiss_call[1]["reason"]
 
 
 class TestAcceptAllAction:
@@ -281,7 +373,9 @@ class TestAcceptAllAction:
 
         mock_db = MagicMock()
         mock_db.get_recommendations.return_value = [high_conf_rec, low_conf_rec]
+        mock_db.get_recommendation.return_value = high_conf_rec
         mock_db.resolve_recommendation.return_value = True
+        mock_db.dismiss_recommendation.return_value = True
 
         mock_stash = AsyncMock()
         mock_stash.get_scene_by_id.return_value = {"id": "42", "stash_ids": []}

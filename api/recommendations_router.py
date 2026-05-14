@@ -1551,6 +1551,12 @@ async def _accept_fingerprint_match(
     stash, db, rec_id: int, scene_id: str, endpoint: str, stash_id: str,
 ):
     """Accept a fingerprint match: add stash_id to local scene, resolve rec."""
+    rec = db.get_recommendation(rec_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+    if rec.status != "pending":
+        return
+
     scene = await stash.get_scene_by_id(scene_id)
     existing_stash_ids = scene.get("stash_ids") or []
 
@@ -1564,6 +1570,23 @@ async def _accept_fingerprint_match(
         await stash.update_scene(scene_id, stash_ids=updated_stash_ids)
 
     db.resolve_recommendation(rec_id, action="accepted")
+
+    # Accepting one match for a local scene should dismiss other pending matches
+    # for that same scene to avoid contradictory follow-up recommendations.
+    pending_fp_recs = db.get_recommendations(
+        status="pending", type="scene_fingerprint_match", limit=10000,
+    )
+    scene_id_str = str(scene_id)
+    for other in pending_fp_recs:
+        if other.id == rec_id:
+            continue
+        other_scene_id = str((other.details or {}).get("local_scene_id", ""))
+        if other_scene_id != scene_id_str:
+            continue
+        db.dismiss_recommendation(
+            other.id,
+            reason=f"Auto-dismissed after accepting scene fingerprint match for local scene {scene_id_str}",
+        )
 
 
 @router.post("/actions/accept-fingerprint-match", response_model=SuccessResponse)
@@ -1599,6 +1622,9 @@ async def _accept_all_fingerprint_matches(
         if not details.get("high_confidence"):
             continue
         if endpoint and details.get("endpoint") != endpoint:
+            continue
+        current = db.get_recommendation(rec.id)
+        if not current or current.status != "pending":
             continue
 
         try:

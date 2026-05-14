@@ -86,11 +86,10 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
                 if updated_at and (latest_updated is None or updated_at > latest_updated):
                     latest_updated = updated_at
 
-                # Skip scenes already linked to this endpoint
-                linked_endpoints = {
-                    sid["endpoint"] for sid in (scene.get("stash_ids") or [])
-                }
-                if endpoint in linked_endpoints:
+                # Skip scenes that already have any stash-box link.
+                # Scene Stash-Box Tagger should only work on completely unlinked scenes.
+                existing_stash_ids = scene.get("stash_ids") or []
+                if existing_stash_ids:
                     continue
 
                 # Collect fingerprints from all files
