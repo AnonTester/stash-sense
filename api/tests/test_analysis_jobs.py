@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from base_job import JobContext
-from jobs.analysis_jobs import AnalysisJob
+from jobs.analysis_jobs import AnalysisJob, FULL_RUN_CURSOR
 
 
 class TestAnalysisJob:
@@ -39,6 +39,25 @@ class TestAnalysisJob:
 
         mock_analyzer.run.assert_called_once()
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_full_cursor_runs_non_incremental(self, ctx, mock_stash, mock_db):
+        mock_analyzer = MagicMock()
+        mock_result = MagicMock()
+        mock_result.recommendations_created = 0
+        mock_result.items_processed = 0
+        mock_analyzer.run = AsyncMock(return_value=mock_result)
+
+        with patch('jobs.analysis_jobs.ANALYZERS') as mock_reg, \
+             patch('jobs.analysis_jobs.get_rec_db', return_value=mock_db), \
+             patch('jobs.analysis_jobs.get_stash_client', return_value=mock_stash):
+            mock_cls = MagicMock(return_value=mock_analyzer)
+            mock_reg.get.return_value = mock_cls
+
+            job = AnalysisJob("scene_fingerprint_match")
+            await job.run(ctx, cursor=FULL_RUN_CURSOR)
+
+        mock_analyzer.run.assert_called_once_with(incremental=False)
 
     @pytest.mark.asyncio
     async def test_respects_stop_request(self, ctx, mock_stash, mock_db):

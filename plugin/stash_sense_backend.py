@@ -345,10 +345,13 @@ def handle_queue(mode, args, sidecar_url):
     elif mode == "queue_types":
         return sidecar_get(sidecar_url, "/queue/types")
     elif mode == "queue_submit":
-        return sidecar_post(sidecar_url, "/queue", {
+        payload = {
             "type": args["type"],
             "triggered_by": args.get("triggered_by", "user"),
-        })
+        }
+        if "cursor" in args:
+            payload["cursor"] = args.get("cursor")
+        return sidecar_post(sidecar_url, "/queue", payload)
     elif mode == "queue_cancel":
         return sidecar_delete(sidecar_url, f"/queue/{args['job_id']}")
     elif mode == "queue_stop":
@@ -409,9 +412,10 @@ def rec_analysis_types(sidecar_url):
     return sidecar_get(sidecar_url, "/recommendations/analysis/types")
 
 
-def rec_run_analysis(sidecar_url, analysis_type):
+def rec_run_analysis(sidecar_url, analysis_type, full=False):
     """Run an analysis."""
-    return sidecar_post(sidecar_url, f"/recommendations/analysis/{analysis_type}/run")
+    query = "?full=true" if full else ""
+    return sidecar_post(sidecar_url, f"/recommendations/analysis/{analysis_type}/run{query}")
 
 
 def rec_analysis_runs(sidecar_url, analysis_type=None, limit=20):
@@ -549,7 +553,11 @@ def handle_recommendations(mode, args, sidecar_url):
         analysis_type = args.get("analysis_type")
         if not analysis_type:
             return {"error": "No analysis_type provided"}
-        return rec_run_analysis(sidecar_url, analysis_type)
+        return rec_run_analysis(
+            sidecar_url,
+            analysis_type,
+            full=bool(args.get("full", False)),
+        )
 
     elif mode == "rec_analysis_runs":
         return rec_analysis_runs(

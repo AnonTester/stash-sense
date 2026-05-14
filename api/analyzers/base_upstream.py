@@ -19,6 +19,8 @@ from config import get_stashbox_shortname
 
 logger = logging.getLogger(__name__)
 
+PROGRESS_LOG_INTERVAL = 10
+
 
 class BaseUpstreamAnalyzer(BaseAnalyzer):
     """
@@ -291,141 +293,144 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
         latest_updated_at = None
         created = 0
         processed = 0
+        compared = 0
         skipped = 0
 
-        for i, (stash_box_id, local_entity) in enumerate(local_lookup.items()):
+        for i, (stash_box_id, local_entity) in enumerate(local_lookup.items(), start=1):
             local_id = str(local_entity["id"])
-
-            if skip_local_ids is not None and local_id in skip_local_ids:
-                logger.info(
-                    f"Skipping {self.entity_type} {local_id} on {endpoint} "
-                    f"(already processed by higher-priority endpoint)"
-                )
-                skipped += 1
-                continue
-
-            if self.rec_db.is_permanently_dismissed(self.type, self.entity_type, local_id):
-                skipped += 1
-                continue
+            processed = i
 
             try:
-                up = await self._get_upstream_entity(sbc, stash_box_id)
-            except Exception as e:
-                logger.warning(
-                    f"Failed to fetch {self.entity_type} {stash_box_id}: {e}"
-                )
-                continue
+                if skip_local_ids is not None and local_id in skip_local_ids:
+                    logger.info(
+                        f"Skipping {self.entity_type} {local_id} on {endpoint} "
+                        f"(already processed by higher-priority endpoint)"
+                    )
+                    skipped += 1
+                    continue
 
-            if not up:
-                continue
+                if self.rec_db.is_permanently_dismissed(self.type, self.entity_type, local_id):
+                    skipped += 1
+                    continue
 
-            updated_at = self._get_upstream_updated_at(up)
+                try:
+                    up = await self._get_upstream_entity(sbc, stash_box_id)
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to fetch {self.entity_type} {stash_box_id}: {e}"
+                    )
+                    continue
 
-            if latest_updated_at is None or (updated_at and updated_at > latest_updated_at):
-                latest_updated_at = updated_at
+                if not up:
+                    continue
 
-            # In incremental mode, skip entities not updated since last run.
-            # Still add to skip_local_ids so lower-priority endpoints don't re-process.
-            if watermark and updated_at and updated_at <= watermark:
-                skipped += 1
-                if skip_local_ids is not None:
-                    skip_local_ids.add(local_id)
-                continue
+                updated_at = self._get_upstream_updated_at(up)
 
-            if self._is_upstream_deleted(up):
-                continue
+                if latest_updated_at is None or (updated_at and updated_at > latest_updated_at):
+                    latest_updated_at = updated_at
 
-            normalized = self._normalize_upstream(up)
+                # In incremental mode, skip entities not updated since last run.
+                # Still add to skip_local_ids so lower-priority endpoints don't re-process.
+                if watermark and updated_at and updated_at <= watermark:
+                    skipped += 1
+                    if skip_local_ids is not None:
+                        skip_local_ids.add(local_id)
+                    continue
 
-            snapshot_row = self.rec_db.get_upstream_snapshot(
-                entity_type=self.entity_type,
-                endpoint=endpoint,
-                stash_box_id=stash_box_id,
-            )
-            snapshot = snapshot_row["upstream_data"] if snapshot_row else None
+                if self._is_upstream_deleted(up):
+                    continue
 
-            local_data = self._build_local_data(local_entity)
+                normalized = self._normalize_upstream(up)
 
-            changes = self._diff_fields(
-                local_data, normalized, snapshot, enabled_fields
-            )
-
-            processed += 1
-
-            if (i + 1) % 50 == 0:
-                logger.warning(
-                    f"Progress: {i + 1}/{len(local_lookup)} checked, "
-                    f"{processed} compared, {created} new recs"
-                )
-                self.update_progress(processed, created)
-
-            if not changes:
-                # No differences: safe to update snapshot baseline
-                self.rec_db.upsert_upstream_snapshot(
+                snapshot_row = self.rec_db.get_upstream_snapshot(
                     entity_type=self.entity_type,
-                    local_entity_id=local_id,
                     endpoint=endpoint,
                     stash_box_id=stash_box_id,
-                    upstream_data=normalized,
-                    upstream_updated_at=updated_at or "",
                 )
-                # Auto-resolve any stale pending recommendation
-                stale = self.rec_db.get_recommendation_by_target(
+                snapshot = snapshot_row["upstream_data"] if snapshot_row else None
+
+                local_data = self._build_local_data(local_entity)
+
+                changes = self._diff_fields(
+                    local_data, normalized, snapshot, enabled_fields
+                )
+
+                compared += 1
+
+                if not changes:
+                    # No differences: safe to update snapshot baseline
+                    self.rec_db.upsert_upstream_snapshot(
+                        entity_type=self.entity_type,
+                        local_entity_id=local_id,
+                        endpoint=endpoint,
+                        stash_box_id=stash_box_id,
+                        upstream_data=normalized,
+                        upstream_updated_at=updated_at or "",
+                    )
+                    # Auto-resolve any stale pending recommendation
+                    stale = self.rec_db.get_recommendation_by_target(
+                        self.type, self.entity_type, local_id, status="pending"
+                    )
+                    if stale:
+                        self.rec_db.resolve_recommendation(
+                            stale.id, action="auto_resolved",
+                            details={"reason": "no_differences"},
+                        )
+                    if skip_local_ids is not None:
+                        skip_local_ids.add(local_id)
+                    continue
+
+                endpoint_name = get_stashbox_shortname(endpoint)
+                details = self._build_recommendation_details(
+                    endpoint=endpoint,
+                    endpoint_name=endpoint_name,
+                    stash_box_id=stash_box_id,
+                    local_entity=local_entity,
+                    updated_at=updated_at,
+                    changes=changes,
+                )
+
+                # Check for existing pending recommendation
+                existing_pending = self.rec_db.get_recommendation_by_target(
                     self.type, self.entity_type, local_id, status="pending"
                 )
-                if stale:
-                    self.rec_db.resolve_recommendation(
-                        stale.id, action="auto_resolved",
-                        details={"reason": "no_differences"},
+
+                if existing_pending:
+                    self.rec_db.update_recommendation_details(existing_pending.id, details)
+                else:
+                    # Check for dismissed recommendation that can be reopened
+                    existing_dismissed = self.rec_db.get_recommendation_by_target(
+                        self.type, self.entity_type, local_id, status="dismissed"
                     )
+
+                    if existing_dismissed:
+                        self.rec_db.undismiss(self.type, self.entity_type, local_id)
+                        self.rec_db.reopen_recommendation(existing_dismissed.id, details)
+                        created += 1
+                    else:
+                        rec_id = self.create_recommendation(
+                            target_type=self.entity_type,
+                            target_id=local_id,
+                            details=details,
+                            confidence=1.0,
+                        )
+                        if rec_id:
+                            created += 1
+
                 if skip_local_ids is not None:
                     skip_local_ids.add(local_id)
-                continue
-
-            endpoint_name = get_stashbox_shortname(endpoint)
-            details = self._build_recommendation_details(
-                endpoint=endpoint,
-                endpoint_name=endpoint_name,
-                stash_box_id=stash_box_id,
-                local_entity=local_entity,
-                updated_at=updated_at,
-                changes=changes,
-            )
-
-            # Check for existing pending recommendation
-            existing_pending = self.rec_db.get_recommendation_by_target(
-                self.type, self.entity_type, local_id, status="pending"
-            )
-
-            if existing_pending:
-                self.rec_db.update_recommendation_details(existing_pending.id, details)
-            else:
-                # Check for dismissed recommendation that can be reopened
-                existing_dismissed = self.rec_db.get_recommendation_by_target(
-                    self.type, self.entity_type, local_id, status="dismissed"
-                )
-
-                if existing_dismissed:
-                    self.rec_db.undismiss(self.type, self.entity_type, local_id)
-                    self.rec_db.reopen_recommendation(existing_dismissed.id, details)
-                    created += 1
-                else:
-                    rec_id = self.create_recommendation(
-                        target_type=self.entity_type,
-                        target_id=local_id,
-                        details=details,
-                        confidence=1.0,
+            finally:
+                self.update_progress(i, created)
+                if i % PROGRESS_LOG_INTERVAL == 0:
+                    logger.warning(
+                        f"Progress: {i}/{len(local_lookup)} checked, "
+                        f"{compared} compared, {created} new recs"
                     )
-                    if rec_id:
-                        created += 1
-
-            if skip_local_ids is not None:
-                skip_local_ids.add(local_id)
 
         self.update_progress(processed, created)
 
         logger.warning(
-            f"Endpoint {endpoint} complete: {processed} compared, "
+            f"Endpoint {endpoint} complete: {processed} checked, {compared} compared, "
             f"{created} recs created, {skipped} skipped"
         )
 

@@ -442,10 +442,12 @@ async def run_analysis(type: str, full: bool = False):
         raise HTTPException(status_code=503, detail="Queue manager not initialized")
 
     from job_models import JobPriority
+    from jobs.analysis_jobs import FULL_RUN_CURSOR
     job_id = _queue_manager.submit(
         type_id=type,
         triggered_by="user",
         priority=JobPriority.HIGH,
+        cursor=FULL_RUN_CURSOR if full else None,
     )
     if job_id is None:
         raise HTTPException(status_code=409, detail=f"Analysis '{type}' is already running or queued")

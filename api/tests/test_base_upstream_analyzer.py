@@ -384,7 +384,7 @@ class TestBaseUpstreamAnalyzerGenericLogic:
             MockSBC.return_value = mock_sbc
             result = await analyzer.run(incremental=True)
 
-        assert result.items_processed == 0  # skipped by watermark
+        assert result.items_processed == 1  # checked but skipped by watermark
         assert result.recommendations_created == 0
 
     @pytest.mark.asyncio

@@ -29,7 +29,11 @@
     async getStatus() { return apiCall('queue_status'); },
     async getJobs(status) { return apiCall('queue_list', status ? { status } : {}); },
     async getTypes() { return apiCall('queue_types'); },
-    async submit(type) { return apiCall('queue_submit', { type }); },
+    async submit(type, cursor = null) {
+      const payload = { type };
+      if (cursor !== null) payload.cursor = cursor;
+      return apiCall('queue_submit', payload);
+    },
     async cancel(jobId) { return apiCall('queue_cancel', { job_id: jobId }); },
     async stop(jobId) { return apiCall('queue_stop', { job_id: jobId }); },
     async retry(jobId) { return apiCall('queue_retry', { job_id: jobId }); },
@@ -136,7 +140,8 @@
             button.disabled = true;
             button.textContent = 'Submitting...';
             try {
-              await QueueAPI.submit(type.type_id);
+              const cursor = type.type_id === 'scene_fingerprint_match' ? '__full__' : null;
+              await QueueAPI.submit(type.type_id, cursor);
               await refreshContent(container);
             } catch (err) {
               if (err.message.includes('409') || err.message.includes('already')) {

@@ -9,6 +9,8 @@ from recommendations_router import ANALYZERS, get_rec_db, get_stash_client
 
 logger = logging.getLogger(__name__)
 
+FULL_RUN_CURSOR = "__full__"
+
 
 class AnalysisJob(BaseJob):
     """Generic wrapper that runs any registered analyzer as a queue job."""
@@ -43,11 +45,17 @@ class AnalysisJob(BaseJob):
         if context.is_stop_requested():
             analyzer.request_stop()
 
+        force_full = cursor == FULL_RUN_CURSOR
+        incremental = not force_full
+
         try:
-            result = await analyzer.run(incremental=True)
+            result = await analyzer.run(incremental=incremental)
 
             db.complete_analysis_run(run_id, result.recommendations_created)
-            await context.report_progress(result.items_processed, result.items_processed)
+            final_total = result.items_processed
+            if analyzer._items_total is not None and result.items_processed <= analyzer._items_total:
+                final_total = analyzer._items_total
+            await context.report_progress(result.items_processed, final_total)
             logger.warning(
                 "Analysis job %s completed (run_id=%d): %d processed, %d recommendations",
                 self._type_id, run_id, result.items_processed, result.recommendations_created,

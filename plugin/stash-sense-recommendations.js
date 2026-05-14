@@ -63,8 +63,8 @@
       return apiCall('rec_analysis_types');
     },
 
-    async runAnalysis(type) {
-      return apiCall('rec_run_analysis', { analysis_type: type });
+    async runAnalysis(type, full = false) {
+      return apiCall('rec_run_analysis', { analysis_type: type, full });
     },
 
     async getAnalysisRuns(type = null, limit = 10) {
