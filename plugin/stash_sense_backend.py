@@ -351,6 +351,10 @@ def handle_queue(mode, args, sidecar_url):
         }
         if "cursor" in args:
             payload["cursor"] = args.get("cursor")
+        elif payload["type"] == "scene_fingerprint_match" and payload["triggered_by"] == "user":
+            # Backward-compatible safety: user-triggered Scene Stash-Box Tagger
+            # should run a full scan unless caller explicitly requested incremental.
+            payload["cursor"] = "__full__"
         return sidecar_post(sidecar_url, "/queue", payload)
     elif mode == "queue_cancel":
         return sidecar_delete(sidecar_url, f"/queue/{args['job_id']}")
@@ -553,10 +557,16 @@ def handle_recommendations(mode, args, sidecar_url):
         analysis_type = args.get("analysis_type")
         if not analysis_type:
             return {"error": "No analysis_type provided"}
+        full_arg = args.get("full")
+        full = (
+            bool(full_arg)
+            if full_arg is not None
+            else analysis_type == "scene_fingerprint_match"
+        )
         return rec_run_analysis(
             sidecar_url,
             analysis_type,
-            full=bool(args.get("full", False)),
+            full=full,
         )
 
     elif mode == "rec_analysis_runs":

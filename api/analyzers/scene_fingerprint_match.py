@@ -72,6 +72,9 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
         scenes_needing_match = []
         offset = 0
         latest_updated = watermark_ts
+        fetched_scenes = 0
+        skipped_with_links = 0
+        skipped_without_fingerprints = 0
 
         while True:
             scenes, total = await self.stash.get_scenes_with_fingerprints(
@@ -79,6 +82,7 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
             )
             if not scenes:
                 break
+            fetched_scenes += len(scenes)
 
             for scene in scenes:
                 # Track latest updated_at for watermark
@@ -90,6 +94,7 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
                 # Scene Stash-Box Tagger should only work on completely unlinked scenes.
                 existing_stash_ids = scene.get("stash_ids") or []
                 if existing_stash_ids:
+                    skipped_with_links += 1
                     continue
 
                 # Collect fingerprints from all files
@@ -110,18 +115,34 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
                         "fingerprints": fingerprints,
                         "duration": duration,
                     })
+                else:
+                    skipped_without_fingerprints += 1
 
             offset += len(scenes)
             if offset >= total:
                 break
 
+        logger.warning(
+            "[%s] Scene fingerprint scan summary: fetched=%d, candidates=%d, "
+            "skipped_linked=%d, skipped_no_fingerprints=%d, incremental=%s, watermark=%s",
+            endpoint_name,
+            fetched_scenes,
+            len(scenes_needing_match),
+            skipped_with_links,
+            skipped_without_fingerprints,
+            incremental,
+            watermark_ts or "-",
+        )
+
         if not scenes_needing_match:
             if latest_updated:
                 self.rec_db.set_watermark(watermark_key, last_stash_updated_at=latest_updated)
+            self.update_progress(0, 0)
             return 0, 0
 
         # Batch query stash-box
         stashbox = StashBoxClient(endpoint, api_key)
+        self.set_items_total(len(scenes_needing_match))
         logger.warning(
             "[%s] Starting scan of %d scenes with fingerprints",
             endpoint_name, len(scenes_needing_match),

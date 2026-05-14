@@ -125,11 +125,20 @@ async def submit_job(request: SubmitJobRequest):
         priority = request.priority
 
     try:
+        cursor = request.cursor
+        if (
+            cursor is None
+            and request.type == "scene_fingerprint_match"
+            and request.triggered_by == "user"
+        ):
+            from jobs.analysis_jobs import FULL_RUN_CURSOR
+            cursor = FULL_RUN_CURSOR
+
         job_id = _mgr().submit(
             type_id=request.type,
             triggered_by=request.triggered_by,
             priority=priority,
-            cursor=request.cursor,
+            cursor=cursor,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

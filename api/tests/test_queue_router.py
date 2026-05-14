@@ -39,6 +39,13 @@ class TestQueueRouter:
         resp = client.post("/queue", json={"type": "duplicate_performer", "triggered_by": "user"})
         assert resp.status_code == 409
 
+    def test_submit_scene_fingerprint_defaults_to_full_cursor(self, client):
+        resp = client.post("/queue", json={"type": "scene_fingerprint_match", "triggered_by": "user"})
+        assert resp.status_code == 200
+        job_id = resp.json()["job_id"]
+        job = client.get(f"/queue/{job_id}").json()
+        assert job["cursor"] == "__full__"
+
     def test_get_single_job(self, client):
         resp = client.post("/queue", json={"type": "duplicate_performer", "triggered_by": "user"})
         job_id = resp.json()["job_id"]
