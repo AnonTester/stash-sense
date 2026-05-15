@@ -232,11 +232,124 @@
           document.removeEventListener('keydown', escHandler);
           modal.remove();
         };
+        modal._close = closeModal;
         closeBtn.addEventListener('click', closeModal);
         backdrop.addEventListener('click', closeModal);
         document.addEventListener('keydown', escHandler);
 
         return modal;
+      },
+
+      _setNativeInputValue(input, value) {
+        const proto = Object.getPrototypeOf(input);
+        const desc = Object.getOwnPropertyDescriptor(proto, 'value')
+          || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+        if (desc?.set) {
+          desc.set.call(input, value);
+        } else {
+          input.value = value;
+        }
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      },
+
+      _findPerformerFieldInput() {
+        const inputs = Array.from(document.querySelectorAll('input[type="text"], input:not([type])'))
+          .filter((el) => {
+            if (!el || el.offsetParent === null || el.disabled || el.readOnly) return false;
+            // Ignore any controls inside the Stash Sense modal itself.
+            if (el.closest('#ss-modal')) return false;
+            return true;
+          });
+        if (inputs.length === 0) return null;
+
+        const score = (el) => {
+          const id = (el.id || '').toLowerCase();
+          const name = (el.name || '').toLowerCase();
+          const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+          const ph = (el.getAttribute('placeholder') || '').toLowerCase();
+          const cls = (el.className || '').toLowerCase();
+          const groupText = (el.closest('label, .form-group, .form-row, .detail-item, .entity-edit, .scene-tabs, .scene-detail, .react-select, [class*="performer"], [id*="performer"]')?.textContent || '').toLowerCase();
+          const wrapText = (el.closest('form, .detail-container, .scene-tabs, .scene-detail, .entity-edit')?.textContent || '').toLowerCase();
+
+          let s = 0;
+          if (id.includes('performer')) s += 8;
+          if (name.includes('performer')) s += 8;
+          if (aria.includes('performer')) s += 10;
+          if (ph.includes('performer')) s += 10;
+          if (cls.includes('select') || cls.includes('react-select')) s += 6;
+          if (el.closest('[class*="react-select"], [class*="Select"]')) s += 4;
+          if (el.closest('[class*="performer"], [id*="performer"]')) s += 6;
+          if (groupText.includes('performer')) s += 12;
+          if (wrapText.includes('performers')) s += 3;
+          if (((el.value || '').trim()).length === 0) s += 1;
+          return s;
+        };
+
+        const ranked = inputs
+          .map((el) => ({ el, s: score(el) }))
+          .sort((a, b) => b.s - a.s);
+        return ranked[0]?.s > 0 ? ranked[0].el : null;
+      },
+
+      async _injectPerformersIntoField(performerNames = []) {
+        if (!performerNames || performerNames.length === 0) return false;
+        const input = this._findPerformerFieldInput();
+        if (!input) return false;
+
+        const names = Array.from(new Set(
+          performerNames
+            .map((n) => (n || '').trim())
+            .filter(Boolean),
+        ));
+        if (names.length === 0) return false;
+
+        // Best-effort react-select interaction: type performer name and confirm
+        // with Enter to add to the current field state.
+        for (const name of names) {
+          input.focus();
+          this._setNativeInputValue(input, name);
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          await new Promise((r) => setTimeout(r, 180));
+          const enterEvt = {
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+            cancelable: true,
+          };
+          input.dispatchEvent(new KeyboardEvent('keydown', enterEvt));
+          input.dispatchEvent(new KeyboardEvent('keypress', enterEvt));
+          input.dispatchEvent(new KeyboardEvent('keyup', enterEvt));
+          await new Promise((r) => setTimeout(r, 180));
+        }
+        // Clear residual text in the typeahead input.
+        this._setNativeInputValue(input, '');
+        return true;
+      },
+
+      async _finishMutation(modal, performerNames = []) {
+        // Preserve any unsaved form edits. Do not reload the page.
+        try {
+          await this._injectPerformersIntoField(performerNames);
+        } catch (e) {
+          console.debug('[Stash Sense] Could not inject performer field values:', e);
+        }
+        if (modal && typeof modal._close === 'function') {
+          modal._close();
+        }
+        // Nudge React forms that rely on focus/blur cycles.
+        const active = document.activeElement;
+        if (active && typeof active.blur === 'function') active.blur();
+      },
+
+      _withTimeout(promise, timeoutMs, timeoutMessage) {
+        return Promise.race([
+          promise,
+          new Promise((_, reject) => {
+            setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+          }),
+        ]);
       },
 
       updateLoading(modal, message, detail = '') {
@@ -345,8 +458,8 @@
         // Add click handlers for "Add to Scene" buttons
         resultsDiv.querySelectorAll('.ss-btn-add').forEach(btn => {
           btn.addEventListener('click', async (e) => {
-            const performerId = e.target.dataset.performerId;
-            const targetSceneId = e.target.dataset.sceneId;
+            const performerId = btn.dataset.performerId;
+            const targetSceneId = btn.dataset.sceneId;
             btn.disabled = true;
             btn.textContent = 'Adding...';
 
@@ -354,6 +467,9 @@
             if (success) {
               btn.textContent = 'Added!';
               btn.classList.add('ss-btn-success');
+              const localStatus = btn.closest('.ss-actions, .ss-alt-match-actions')?.querySelector('.ss-local-status');
+              const inferredName = (localStatus?.textContent || '').replace(/^In library as:\s*/i, '').trim();
+              await this._finishMutation(modal, inferredName ? [inferredName] : []);
             } else {
               btn.textContent = 'Failed';
               btn.classList.add('ss-btn-error');
@@ -372,27 +488,40 @@
 
             try {
               const settings = await SS.getSettings();
-              const result = await SS.runPluginOperation('create_performer_from_stashbox', {
-                endpoint,
-                stashdb_id: stashdbId,
-                scene_id: targetSceneId,
-                sidecar_url: settings.sidecarUrl,
-              });
+              const result = await this._withTimeout(
+                SS.runPluginOperation('create_performer_from_stashbox', {
+                  endpoint,
+                  stashdb_id: stashdbId,
+                  scene_id: targetSceneId,
+                  sidecar_url: settings.sidecarUrl,
+                }),
+                45000,
+                'Create performer operation timed out',
+              );
 
               if (result.error) throw new Error(result.error);
 
               btn.textContent = 'Added!';
               btn.classList.add('ss-btn-success');
-              // Hide the "Add as..." button next to it
-              const linkAsBtn = btn.closest('.ss-actions, .ss-alt-match-actions')?.querySelector('.ss-btn-link-as');
-              if (linkAsBtn) linkAsBtn.style.display = 'none';
-              // Update "Not in library" text
-              const notInLib = btn.closest('.ss-actions, .ss-alt-match-actions')?.querySelector('.ss-not-in-library');
-              if (notInLib) {
-                notInLib.textContent = `Created: ${result.name || 'performer'}`;
-                notInLib.classList.remove('ss-not-in-library');
-              }
+              await this._finishMutation(modal, [result.name || '']);
             } catch (err) {
+              // Fallback: if the plugin call timed out but performer creation
+              // actually succeeded, complete UI flow anyway.
+              if ((err?.message || '').toLowerCase().includes('timed out')) {
+                try {
+                  const graphqlUrl = this._stashboxGraphqlUrl(endpoint);
+                  const localPerformer = await SS.findPerformerByStashDBId(stashdbId, graphqlUrl);
+                  if (localPerformer?.id) {
+                    await this.addPerformerToScene(targetSceneId, localPerformer.id);
+                    btn.textContent = 'Added!';
+                    btn.classList.add('ss-btn-success');
+                    await this._finishMutation(modal, [localPerformer.name || '']);
+                    return;
+                  }
+                } catch (recoveryErr) {
+                  console.warn('[Stash Sense] Timed out, recovery check failed:', recoveryErr);
+                }
+              }
               btn.textContent = 'Failed';
               btn.classList.add('ss-btn-error');
               btn.disabled = false;
@@ -680,6 +809,8 @@
                       notInLib.textContent = `Added as: ${performerName}`;
                       notInLib.classList.remove('ss-not-in-library');
                     }
+                    const modal = triggerBtn.closest('#ss-modal');
+                    await self._finishMutation(modal, [performerName || '']);
                   } catch (err) {
                     panel.innerHTML = `<div class="ss-search-error">Failed: ${SS.escapeHtml(err.message)}</div>`;
                     console.error('Failed to link performer:', err);
@@ -898,8 +1029,8 @@
         // Add click handlers for "Add to Image" buttons
         resultsDiv.querySelectorAll('.ss-btn-add').forEach(btn => {
           btn.addEventListener('click', async (e) => {
-            const performerId = e.target.dataset.performerId;
-            const targetImageId = e.target.dataset.imageId;
+            const performerId = btn.dataset.performerId;
+            const targetImageId = btn.dataset.imageId;
             btn.disabled = true;
             btn.textContent = 'Adding...';
 
@@ -907,6 +1038,9 @@
             if (success) {
               btn.textContent = 'Added!';
               btn.classList.add('ss-btn-success');
+              const localStatus = btn.closest('.ss-actions, .ss-alt-match-actions')?.querySelector('.ss-local-status');
+              const inferredName = (localStatus?.textContent || '').replace(/^In library as:\s*/i, '').trim();
+              await this._finishMutation(modal, inferredName ? [inferredName] : []);
             } else {
               btn.textContent = 'Failed';
               btn.classList.add('ss-btn-error');
@@ -1195,40 +1329,53 @@
           personsDiv.appendChild(personDiv);
         }
 
+        let bulkAcceptInProgress = false;
+
+        const runGalleryAccept = async (btn, deferFinish = false) => {
+          const performerId = btn.dataset.performerId;
+          const targetGalleryId = btn.dataset.galleryId;
+          let imageIds;
+          try {
+            imageIds = JSON.parse(btn.dataset.imageIds);
+          } catch (_) {
+            imageIds = [];
+          }
+          const tagImages = btn.closest('.ss-gallery-performer-actions')
+            ?.querySelector('.ss-tag-images-toggle')?.checked || false;
+
+          btn.disabled = true;
+          btn.textContent = 'Adding...';
+
+          let success = await this.addPerformerToGallery(targetGalleryId, performerId);
+
+          if (success && tagImages) {
+            btn.textContent = 'Tagging images...';
+            for (const imgId of imageIds) {
+              await this.addPerformerToImage(imgId, performerId);
+            }
+          }
+
+          if (success) {
+            btn.textContent = tagImages ? `Added to gallery + ${imageIds.length} images` : 'Added to gallery!';
+            btn.classList.add('ss-btn-success');
+            if (!deferFinish && !bulkAcceptInProgress) {
+              const localStatus = btn.closest('.ss-actions, .ss-gallery-performer-actions')?.querySelector('.ss-local-status');
+              const inferredName = (localStatus?.textContent || '').replace(/^In library as:\s*/i, '').trim();
+              await this._finishMutation(modal, inferredName ? [inferredName] : []);
+            }
+          } else {
+            btn.textContent = 'Failed';
+            btn.classList.add('ss-btn-error');
+            btn.disabled = false;
+          }
+
+          return success;
+        };
+
         // Click handlers for individual accept buttons
         resultsDiv.querySelectorAll('.ss-gallery-accept-btn').forEach(btn => {
-          btn.addEventListener('click', async (e) => {
-            const performerId = btn.dataset.performerId;
-            const targetGalleryId = btn.dataset.galleryId;
-            let imageIds;
-            try {
-              imageIds = JSON.parse(btn.dataset.imageIds);
-            } catch (_) {
-              imageIds = [];
-            }
-            const tagImages = btn.closest('.ss-gallery-performer-actions')
-              ?.querySelector('.ss-tag-images-toggle')?.checked || false;
-
-            btn.disabled = true;
-            btn.textContent = 'Adding...';
-
-            let success = await this.addPerformerToGallery(targetGalleryId, performerId);
-
-            if (success && tagImages) {
-              btn.textContent = `Tagging images...`;
-              for (const imgId of imageIds) {
-                await this.addPerformerToImage(imgId, performerId);
-              }
-            }
-
-            if (success) {
-              btn.textContent = tagImages ? `Added to gallery + ${imageIds.length} images` : 'Added to gallery!';
-              btn.classList.add('ss-btn-success');
-            } else {
-              btn.textContent = 'Failed';
-              btn.classList.add('ss-btn-error');
-              btn.disabled = false;
-            }
+          btn.addEventListener('click', async () => {
+            await runGalleryAccept(btn, false);
           });
         });
 
@@ -1237,16 +1384,30 @@
           const acceptAllBtn = e.target;
           acceptAllBtn.disabled = true;
           acceptAllBtn.textContent = 'Accepting...';
+          bulkAcceptInProgress = true;
 
-          const buttons = resultsDiv.querySelectorAll('.ss-gallery-accept-btn:not(:disabled)');
+          let successCount = 0;
+          const buttons = Array.from(resultsDiv.querySelectorAll('.ss-gallery-accept-btn:not(:disabled)'));
           for (const btn of buttons) {
-            btn.click();
+            const ok = await runGalleryAccept(btn, true);
+            if (ok) successCount += 1;
             // Small delay between operations
             await new Promise(r => setTimeout(r, 200));
           }
 
-          acceptAllBtn.textContent = 'All accepted!';
-          acceptAllBtn.classList.add('ss-btn-success');
+          bulkAcceptInProgress = false;
+          if (successCount > 0) {
+            acceptAllBtn.textContent = `Accepted ${successCount}`;
+            acceptAllBtn.classList.add('ss-btn-success');
+            const names = Array.from(resultsDiv.querySelectorAll('.ss-gallery-performer-actions .ss-local-status'))
+              .map((el) => (el.textContent || '').replace(/^In library as:\s*/i, '').trim())
+              .filter(Boolean);
+            await this._finishMutation(modal, names);
+          } else {
+            acceptAllBtn.textContent = 'No changes applied';
+            acceptAllBtn.classList.add('ss-btn-error');
+            acceptAllBtn.disabled = false;
+          }
         });
 
         resultsDiv.style.display = 'block';
