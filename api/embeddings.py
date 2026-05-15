@@ -9,6 +9,7 @@ available, falling back to CPU. No TensorFlow dependency at runtime.
 """
 import io
 import os
+import warnings
 import cv2
 import numpy as np
 import onnxruntime as ort
@@ -19,6 +20,15 @@ from pathlib import Path
 
 # InsightFace for RetinaFace detection (uses ONNX Runtime with GPU)
 from insightface.app import FaceAnalysis
+
+# InsightFace currently emits this from its internal face_align helper in some
+# code paths. Keep filter narrow to this exact deprecation line.
+warnings.filterwarnings(
+    "ignore",
+    message=r"`estimate` is deprecated since version 0\.26 and will be removed in version 2\.2\..*",
+    category=FutureWarning,
+    module=r"insightface\.utils\.face_align",
+)
 
 
 # Model search paths: DATA_DIR/models first, then ./models (relative to this file)
@@ -151,10 +161,21 @@ class FaceEmbeddingGenerator:
         """Lazy-load InsightFace face analyzer with RetinaFace."""
         if self._face_analyzer is None:
             print(f"Loading RetinaFace detector on {self.device}...")
-            self._face_analyzer = FaceAnalysis(
-                name="buffalo_sc",
-                providers=self._ort_providers(),
-            )
+            # Detection-only mode avoids loading recognition heads inside
+            # InsightFace (we run our own ONNX embeddings separately).
+            try:
+                self._face_analyzer = FaceAnalysis(
+                    name="buffalo_sc",
+                    allowed_modules=["detection"],
+                    providers=self._ort_providers(),
+                )
+            except TypeError:
+                # Backward compatibility for older InsightFace versions without
+                # allowed_modules constructor support.
+                self._face_analyzer = FaceAnalysis(
+                    name="buffalo_sc",
+                    providers=self._ort_providers(),
+                )
             # Get detection size from settings, fall back to 640
             try:
                 from settings import get_setting
