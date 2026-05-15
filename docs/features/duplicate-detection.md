@@ -1,56 +1,124 @@
 # Duplicate Detection
 
-Stash Sense finds duplicate scenes that Stash's built-in phash matching misses — different intros/outros, trimming, aspect ratio changes, or watermarks.
+This page documents the exact duplicate scene detection behavior currently implemented.
 
 ## Prerequisites
 
-- **Face recognition results** for scenes (run performer identification first, which requires sprite sheets)
-- More face recognition coverage across your library means better duplicate detection accuracy
+- Stash scene metadata (studio, performers, date, stash IDs) available through Stash GraphQL
+- Perceptual hashes (phash) available on scene files for best coverage
+- Face fingerprints are optional but improve non-authoritative matching
 
-Duplicate detection relies on face fingerprints — per-scene records of which performers appeared, how often, and in what proportions. Scenes without face recognition results can still be detected as duplicates via Stash-Box ID matching or metadata overlap, but face fingerprints are the strongest non-authoritative signal.
+## Rules In Effect
 
----
+### 1. Run behavior and cleanup
 
-## Detection Signals
+- The analyzer currently runs as a full scan in practice (incremental mode is not used by the algorithm).
+- At run start it deletes all **pending** `duplicate_scenes` recommendations from previous runs.
+  - Purpose: avoid stale pending rows and allow re-insertion with fresh scoring.
+  - Dismissed targets remain dismissed and continue to block recreation.
+- It clears the full `duplicate_candidates` table before generating candidates.
+  - Reason: uniqueness is on `(scene_a_id, scene_b_id)` and old rows would block new inserts.
 
-Stash Sense uses multiple signals to identify duplicates, each with a confidence cap:
+### 2. Candidate generation phase (three sources)
 
-| Signal | Max Confidence | How It Works |
-|--------|---------------|--------------|
-| Stash-Box ID match | 100% | Authoritative — same scene on a Stash-Box endpoint |
-| Face fingerprint similarity | 85% | Same performers in same ratios (robust to trimming) |
-| Metadata overlap | 60% | Same studio + same performers |
+Candidate pairs are generated as canonical ordered pairs `(min(scene_id), max(scene_id))` and inserted with `INSERT OR IGNORE`.
 
-Signals combine with diminishing returns (`primary + secondary × 0.3`) to prevent false confidence inflation. No single signal other than Stash-Box ID reaches 100%.
+Source A: Shared stash-box ID on same endpoint
 
----
+- From scenes returned by `get_scenes_with_fingerprints(...)`.
+- If two scenes share `(endpoint, stash_id)`, they become candidates.
 
-## How It Works
+Source B: Phash Hamming distance
 
-### Candidate Generation
+- Uses the first available `phash` fingerprint per scene.
+- Generates pairs where `HammingDistance(phash_a, phash_b) <= 10`.
+- Distance values are kept in memory for scoring phase.
 
-Direct comparison of every scene pair would be O(n²) — impossible for large libraries. Instead, Stash Sense uses a two-phase approach:
+Source C: Metadata intersection
 
-1. **Candidate generation** — SQL joins and inverted indices produce O(n) candidate pairs from three sources:
-    - Stash-Box ID grouping (same scene on endpoint)
-    - Face fingerprint self-join (shared performers)
-    - Metadata intersection (same studio AND performer)
-2. **Scoring** — Each candidate pair is scored using the signal hierarchy above
+- From `get_scenes_for_fingerprinting(...)`.
+- Index key is `(studio_id, performer_id)`.
+- Scenes that share at least one such key become candidates.
 
-This handles libraries with 15,000+ scenes efficiently.
+### 3. Scoring phase entry criteria
 
-### Face Fingerprints
+For each candidate pair:
 
-A face fingerprint records which performers appeared in a scene, how many times each was detected, and what proportion of total faces they represent. Two scenes with the same performers appearing in the same ratios are likely the same scene, even if one is trimmed, has different resolution, or has a watermark.
+- Scene metadata is loaded as `SceneMetadata` (title, date, studio, performers, duration, stash IDs).
+- Face fingerprints are loaded from DB only where `scene_fingerprints.fingerprint_status = 'complete'`.
+- `calculate_duplicate_confidence(...)` is executed once per pair.
+- A recommendation is created only when `confidence >= min_confidence`.
+  - Default `min_confidence = 50.0`.
 
----
+Stored recommendation identity:
 
-## Reviewing Duplicates
+- `target_id = "{scene_a_id}:{scene_b_id}"` (canonical pair order)
 
-Duplicate candidates appear on the recommendations dashboard with:
+### 4. Signal scoring formulas
 
-- **Confidence score** — Combined signal strength
-- **Signal breakdown** — Which signals contributed and how much
-- **Scene details** — Thumbnails, titles, studios for both scenes
+#### Tier 1: Authoritative stash-box match
 
-You can dismiss false positives (soft or permanent dismiss) or take action on confirmed duplicates.
+- If scenes share identical stash-box ID on same endpoint:
+  - confidence = `100.0`
+  - no further scoring needed
+
+#### Phash score (0 to 85)
+
+- If distance is `None`: `0`
+- If distance `> 10`: `0`
+- Else: `85 - (distance * 6.5)`
+
+#### Face signature score (0 to 75)
+
+- Uses performer sets from fingerprints, excluding performer ID `"unknown"`.
+- Requires at least one shared performer.
+- `jaccard = |shared| / |union|`
+- `base = jaccard * 60`
+- `proportion_bonus = max(0, 15 * (1 - avg_shared_proportion_diff * 4))`
+- `face_score = min(base + proportion_bonus, 75)`
+
+#### Metadata score (0 to 60, clamped)
+
+Primary positives:
+
+- Same date + exact performer set: `+45`
+- Same date + performer overlap >= 50%: `+35`
+- Date within 7 days + exact performer set: `+35`
+- Exact performer set: `+25`
+- Same date (with performer data present): `+20`
+- Performer overlap >= 50%: `+15`
+
+Additional boost:
+
+- Same studio: `+10`
+
+Duration penalties (never positive):
+
+- Duration ratio `< 15%`: `-20`
+- Duration ratio `< 30%`: `-10`
+
+#### Final confidence combination
+
+- If `phash_distance <= 4`:
+  - `confidence = phash + min(metadata * 0.15, 5) + min(face * 0.1, 5)`
+- Else if `phash > 0`:
+  - With corroboration (`max(metadata, face) > 0`):
+    - `confidence = phash + max(metadata, face) * 0.4`
+  - Without corroboration:
+    - `confidence = phash * 0.6`
+- Else (no phash signal):
+  - `confidence = max(metadata, face) + min(metadata, face) * 0.3`
+
+Final cap:
+
+- Non-authoritative matches are capped at `95.0`.
+
+### 5. Result ordering in lists
+
+`duplicate_scenes` recommendations are returned sorted by:
+
+1. `confidence DESC`
+2. `created_at DESC`
+3. `id DESC`
+
+This ordering applies consistently across pending/resolved/dismissed status views.
