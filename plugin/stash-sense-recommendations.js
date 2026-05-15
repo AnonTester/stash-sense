@@ -4164,6 +4164,9 @@
 
     const localScreenshotUrl = relativeUrl(localScene?.paths?.screenshot);
     const localPreviewUrl = relativeUrl(localScene?.paths?.preview);
+    const localStudio = localScene?.studio?.name || '';
+    const localPerformers = (localScene?.performers || []).map(p => p?.name).filter(Boolean);
+    const localDate = localScene?.date || '';
     const stashboxCoverUrl = d.stashbox_cover_url;
 
     container.innerHTML = `
@@ -4191,6 +4194,9 @@
             <div class="ss-fp-scene-title">
               <a href="${escapeHtml(localSceneHref)}" target="_blank" rel="noopener">${escapeHtml(d.local_scene_title || 'Unknown')}</a>
             </div>
+            ${localStudio ? `<div class="ss-fp-field"><strong>Studio:</strong> ${escapeHtml(localStudio)}</div>` : ''}
+            ${localPerformers.length ? `<div class="ss-fp-field"><strong>Performers:</strong> ${localPerformers.map(escapeHtml).join(', ')}</div>` : ''}
+            ${localDate ? `<div class="ss-fp-field"><strong>Date:</strong> ${escapeHtml(localDate)}</div>` : ''}
             <div class="ss-fp-field"><strong>Duration:</strong> ${d.duration_local ? formatDuration(d.duration_local) : 'N/A'}</div>
             <div class="ss-fp-field"><strong>Fingerprints:</strong> ${d.total_local_fingerprints}</div>
           </div>

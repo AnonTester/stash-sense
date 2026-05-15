@@ -559,9 +559,9 @@ class RecommendationsDB:
             query += " AND target_type = ?"
             params.append(target_type)
 
-        # Duplicate scene recommendations are reviewed primarily by confidence.
+        # Confidence-ranked recommendation types are reviewed primarily by confidence.
         # Keep this ordering stable across pending/resolved/dismissed groups.
-        if type == "duplicate_scenes":
+        if type in ("duplicate_scenes", "scene_fingerprint_match"):
             query += " ORDER BY COALESCE(confidence, 0) DESC, created_at DESC, id DESC LIMIT ? OFFSET ?"
         else:
             query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"

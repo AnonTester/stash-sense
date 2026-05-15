@@ -240,6 +240,37 @@ class TestGetRecommendations:
         dismissed = db.get_recommendations(type="duplicate_scenes", status="dismissed")
         assert [r.target_id for r in dismissed] == ["d_high", "d_mid", "d_low"]
 
+    def test_scene_fingerprint_match_ordered_by_confidence_desc_per_status_group(self, db):
+        # pending
+        _make_rec(db, type="scene_fingerprint_match", target_type="scene", target_id="p_low", confidence=0.40)
+        _make_rec(db, type="scene_fingerprint_match", target_type="scene", target_id="p_high", confidence=0.92)
+        _make_rec(db, type="scene_fingerprint_match", target_type="scene", target_id="p_mid", confidence=0.71)
+
+        pending = db.get_recommendations(type="scene_fingerprint_match", status="pending")
+        assert [r.target_id for r in pending] == ["p_high", "p_mid", "p_low"]
+
+        # resolved
+        r_low = _make_rec(db, type="scene_fingerprint_match", target_type="scene", target_id="r_low", confidence=0.20)
+        r_high = _make_rec(db, type="scene_fingerprint_match", target_type="scene", target_id="r_high", confidence=0.95)
+        r_mid = _make_rec(db, type="scene_fingerprint_match", target_type="scene", target_id="r_mid", confidence=0.50)
+        db.resolve_recommendation(r_low, action="accepted")
+        db.resolve_recommendation(r_high, action="accepted")
+        db.resolve_recommendation(r_mid, action="accepted")
+
+        resolved = db.get_recommendations(type="scene_fingerprint_match", status="resolved")
+        assert [r.target_id for r in resolved] == ["r_high", "r_mid", "r_low"]
+
+        # dismissed
+        d_low = _make_rec(db, type="scene_fingerprint_match", target_type="scene", target_id="d_low", confidence=0.10)
+        d_high = _make_rec(db, type="scene_fingerprint_match", target_type="scene", target_id="d_high", confidence=0.88)
+        d_mid = _make_rec(db, type="scene_fingerprint_match", target_type="scene", target_id="d_mid", confidence=0.35)
+        db.dismiss_recommendation(d_low, reason="test")
+        db.dismiss_recommendation(d_high, reason="test")
+        db.dismiss_recommendation(d_mid, reason="test")
+
+        dismissed = db.get_recommendations(type="scene_fingerprint_match", status="dismissed")
+        assert [r.target_id for r in dismissed] == ["d_high", "d_mid", "d_low"]
+
 
 # ==================== count_recommendations ====================
 
