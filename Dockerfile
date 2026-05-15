@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     build-essential \
     libgl1-mesa-glx \
+    libgles2 \
+    libegl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -37,6 +39,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     libgl1-mesa-glx \
+    libgles2 \
+    libegl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -44,6 +48,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
+# MediaPipe runtime dependency check (required by mp.Image)
+RUN ldconfig -p | grep -q "libGLESv2.so.2"
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
