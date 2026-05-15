@@ -19,12 +19,67 @@ from pathlib import Path
 
 # InsightFace for RetinaFace detection (uses ONNX Runtime with GPU)
 from insightface.app import FaceAnalysis
-from insightface.utils.face_align import norm_crop
 
 
 # Model search paths: DATA_DIR/models first, then ./models (relative to this file)
 MODELS_DIR = Path(__file__).parent / "models"
 DATA_MODELS_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "models"
+
+
+# ArcFace canonical 5-point template for 112x112 aligned face crops.
+_ARCFACE_TEMPLATE_112 = np.array([
+    [38.2946, 51.6963],
+    [73.5318, 51.5014],
+    [56.0252, 71.7366],
+    [41.5493, 92.3655],
+    [70.7299, 92.2041],
+], dtype=np.float32)
+
+
+def align_face_with_similarity_transform(
+    image: np.ndarray,
+    landmarks: np.ndarray,
+    image_size: int = 112,
+) -> np.ndarray | None:
+    """Align a face using a 5-point similarity transform.
+
+    This replaces InsightFace's norm_crop call path to avoid the deprecated
+    SimilarityTransform.estimate API used upstream.
+
+    Args:
+        image: Source RGB image.
+        landmarks: Face landmarks array (expects at least 5 points with x/y).
+        image_size: Output aligned face size (square).
+
+    Returns:
+        Aligned RGB crop of shape (image_size, image_size, 3), or None if
+        transform estimation fails.
+    """
+    if image_size <= 0:
+        return None
+
+    lm = np.asarray(landmarks, dtype=np.float32)
+    if lm.ndim != 2 or lm.shape[0] < 5 or lm.shape[1] < 2:
+        return None
+
+    src = lm[:5, :2]
+    dst = _ARCFACE_TEMPLATE_112 * (float(image_size) / 112.0)
+
+    # Estimate similarity transform matrix from source landmarks to ArcFace
+    # canonical points.
+    M, _ = cv2.estimateAffinePartial2D(src, dst, method=cv2.LMEDS)
+    if M is None:
+        return None
+
+    try:
+        return cv2.warpAffine(
+            image,
+            M.astype(np.float32),
+            (image_size, image_size),
+            borderValue=0.0,
+        )
+    except Exception:
+        return None
 
 
 @dataclass
@@ -169,11 +224,19 @@ class FaceEmbeddingGenerator:
             # Get 5-point landmarks
             kps = face.kps if hasattr(face, 'kps') else None
 
-            # Align face using InsightFace's norm_crop (5-point similarity transform)
-            # This produces a 112x112 aligned face matching ArcFace's training preprocessing
+            # Align face using 5-point similarity transform to ArcFace canonical
+            # coordinates. This keeps the same alignment intent as norm_crop
+            # without relying on deprecated upstream API paths.
             if kps is not None and len(kps) >= 5:
-                face_img = norm_crop(image, kps, image_size=112)
+                face_img = align_face_with_similarity_transform(
+                    image,
+                    kps,
+                    image_size=112,
+                )
             else:
+                face_img = None
+
+            if face_img is None:
                 # Fallback: raw bbox crop (shouldn't happen with RetinaFace)
                 cx1 = max(0, x1)
                 cy1 = max(0, y1)
