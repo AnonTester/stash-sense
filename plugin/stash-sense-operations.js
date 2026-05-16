@@ -47,6 +47,12 @@
   let historyExpanded = true;
   const FORCE_FULL_SCAN_USER_JOB_TYPES = new Set(['scene_fingerprint_match', 'upstream_scene_changes']);
 
+  function ensurePolling(container) {
+    if (!pollInterval) {
+      startPolling(container);
+    }
+  }
+
   // ==================== Rendering ====================
 
   function createOperationsContainer() {
@@ -144,6 +150,7 @@
               const cursor = FORCE_FULL_SCAN_USER_JOB_TYPES.has(type.type_id) ? '__full__' : null;
               await QueueAPI.submit(type.type_id, cursor);
               await refreshContent(container);
+              ensurePolling(container);
             } catch (err) {
               if (err.message.includes('409') || err.message.includes('already')) {
                 button.textContent = 'Already Running';
@@ -571,6 +578,11 @@
       if (tabName === 'operations' && !operationsPanel.dataset.loaded) {
         operationsPanel.dataset.loaded = 'true';
         renderOperations(operationsPanel);
+      } else if (tabName === 'operations') {
+        // Returning to an already-loaded Operations tab: resume live polling
+        // and refresh immediately so queued jobs transition to running/progress.
+        ensurePolling(operationsPanel);
+        refreshContent(operationsPanel);
       }
 
       // Stop polling when leaving operations tab
