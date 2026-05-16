@@ -35,6 +35,9 @@ class SubmitJobRequest(BaseModel):
     priority: Optional[int] = None
     cursor: Optional[str] = None
 
+
+FORCE_FULL_SCAN_USER_JOB_TYPES = {"scene_fingerprint_match", "upstream_scene_changes"}
+
 class SubmitJobResponse(BaseModel):
     job_id: int
     message: str
@@ -128,8 +131,8 @@ async def submit_job(request: SubmitJobRequest):
         cursor = request.cursor
         if (
             cursor is None
-            and request.type == "scene_fingerprint_match"
             and request.triggered_by == "user"
+            and request.type in FORCE_FULL_SCAN_USER_JOB_TYPES
         ):
             from jobs.analysis_jobs import FULL_RUN_CURSOR
             cursor = FULL_RUN_CURSOR

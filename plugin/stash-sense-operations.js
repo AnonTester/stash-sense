@@ -45,6 +45,7 @@
   let pollInterval = null;
   let jobTypes = null;
   let historyExpanded = true;
+  const FORCE_FULL_SCAN_USER_JOB_TYPES = new Set(['scene_fingerprint_match', 'upstream_scene_changes']);
 
   // ==================== Rendering ====================
 
@@ -140,7 +141,7 @@
             button.disabled = true;
             button.textContent = 'Submitting...';
             try {
-              const cursor = type.type_id === 'scene_fingerprint_match' ? '__full__' : null;
+              const cursor = FORCE_FULL_SCAN_USER_JOB_TYPES.has(type.type_id) ? '__full__' : null;
               await QueueAPI.submit(type.type_id, cursor);
               await refreshContent(container);
             } catch (err) {
@@ -185,7 +186,7 @@
     container.appendChild(section);
   }
 
-  function renderJobCard(job, isActive) {
+  function renderJobCard(job, isActive, isHistory = false) {
     const card = SS.createElement('div', {
       className: `ss-job-card ss-job-${job.status}`,
     });
@@ -252,12 +253,25 @@
     const triggeredByDisplay = job.triggered_by
       ? job.triggered_by.charAt(0).toUpperCase() + job.triggered_by.slice(1)
       : 'Unknown';
-    metaRow.appendChild(SS.createElement('span', {
-      textContent: `Triggered by ${triggeredByDisplay}`,
-    }));
-    if (job.started_at) {
-      const elapsed = getElapsed(job.started_at);
-      metaRow.appendChild(SS.createElement('span', { textContent: elapsed }));
+    if (isHistory) {
+      const triggeredAt = formatTimestamp(job.created_at || job.started_at);
+      const completedDuration = getCompletionDuration(job);
+      const triggeredText = triggeredAt ? `Triggered by ${triggeredByDisplay} on ${triggeredAt}` : `Triggered by ${triggeredByDisplay}`;
+      const durationText = completedDuration ? `Finished in ${completedDuration}` : 'Finished';
+      metaRow.appendChild(SS.createElement('span', {
+        textContent: triggeredText,
+      }));
+      metaRow.appendChild(SS.createElement('span', {
+        textContent: durationText,
+      }));
+    } else {
+      metaRow.appendChild(SS.createElement('span', {
+        textContent: `Triggered by ${triggeredByDisplay}`,
+      }));
+      if (job.started_at) {
+        const elapsed = getElapsed(job.started_at);
+        metaRow.appendChild(SS.createElement('span', { textContent: elapsed }));
+      }
     }
     card.appendChild(metaRow);
 
@@ -374,15 +388,56 @@
       list.style.display = 'none';
     }
     for (const job of jobs.slice(0, 20)) {
-      list.appendChild(renderJobCard(job, false));
+      list.appendChild(renderJobCard(job, false, true));
     }
     section.appendChild(list);
     container.appendChild(section);
   }
 
+  function parseUtcDate(value) {
+    if (!value) return null;
+    const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+    const withTimezone = /Z$|[+-]\d\d:\d\d$/.test(normalized) ? normalized : `${normalized}Z`;
+    const date = new Date(withTimezone);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function formatTimestamp(value) {
+    const date = parseUtcDate(value);
+    if (!date) return '';
+    return date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  function formatExactDuration(secs) {
+    if (!Number.isFinite(secs) || secs < 0) return '';
+    const total = Math.floor(secs);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  }
+
+  function getCompletionDuration(job) {
+    const completed = parseUtcDate(job.completed_at);
+    if (!completed) return '';
+    const start = parseUtcDate(job.created_at) || parseUtcDate(job.started_at);
+    if (!start) return '';
+    const secs = (completed.getTime() - start.getTime()) / 1000;
+    return formatExactDuration(secs);
+  }
+
   function getElapsed(startedAt) {
     if (!startedAt) return '';
-    const start = new Date(startedAt + 'Z');
+    const start = parseUtcDate(startedAt);
+    if (!start) return '';
     const now = new Date();
     const secs = Math.floor((now - start) / 1000);
     if (secs < 60) return `${secs}s`;
@@ -398,7 +453,8 @@
 
   function getETA(job) {
     if (!job.started_at || !job.items_total || !job.items_processed || job.items_processed <= 0) return null;
-    const start = new Date(job.started_at + 'Z');
+    const start = parseUtcDate(job.started_at);
+    if (!start) return null;
     const elapsed = (new Date() - start) / 1000;
     if (elapsed < 3) return null;  // Too early for meaningful estimate
     const rate = job.items_processed / elapsed;

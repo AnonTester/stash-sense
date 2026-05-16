@@ -46,6 +46,24 @@ class TestQueueRouter:
         job = client.get(f"/queue/{job_id}").json()
         assert job["cursor"] == "__full__"
 
+    def test_submit_upstream_scene_defaults_to_full_cursor(self, client):
+        resp = client.post("/queue", json={"type": "upstream_scene_changes", "triggered_by": "user"})
+        assert resp.status_code == 200
+        job_id = resp.json()["job_id"]
+        job = client.get(f"/queue/{job_id}").json()
+        assert job["cursor"] == "__full__"
+
+    def test_submit_upstream_scene_explicit_cursor_is_respected(self, client):
+        resp = client.post("/queue", json={
+            "type": "upstream_scene_changes",
+            "triggered_by": "user",
+            "cursor": "custom-cursor",
+        })
+        assert resp.status_code == 200
+        job_id = resp.json()["job_id"]
+        job = client.get(f"/queue/{job_id}").json()
+        assert job["cursor"] == "custom-cursor"
+
     def test_get_single_job(self, client):
         resp = client.post("/queue", json={"type": "duplicate_performer", "triggered_by": "user"})
         job_id = resp.json()["job_id"]

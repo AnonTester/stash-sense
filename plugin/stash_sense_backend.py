@@ -333,6 +333,10 @@ def sidecar_delete(sidecar_url, endpoint, timeout=30):
 
 # ==================== Queue API Proxy ====================
 
+FULL_SCAN_CURSOR = "__full__"
+FORCE_FULL_SCAN_USER_JOB_TYPES = {"scene_fingerprint_match", "upstream_scene_changes"}
+
+
 def handle_queue(mode, args, sidecar_url):
     """Handle queue-related proxy operations."""
     if mode == "queue_list":
@@ -351,10 +355,13 @@ def handle_queue(mode, args, sidecar_url):
         }
         if "cursor" in args:
             payload["cursor"] = args.get("cursor")
-        elif payload["type"] == "scene_fingerprint_match" and payload["triggered_by"] == "user":
-            # Backward-compatible safety: user-triggered Scene Stash-Box Tagger
-            # should run a full scan unless caller explicitly requested incremental.
-            payload["cursor"] = "__full__"
+        elif (
+            payload["triggered_by"] == "user"
+            and payload["type"] in FORCE_FULL_SCAN_USER_JOB_TYPES
+        ):
+            # Backward-compatible safety: user-triggered jobs in this set
+            # should run full scan unless caller explicitly requested incremental.
+            payload["cursor"] = FULL_SCAN_CURSOR
         return sidecar_post(sidecar_url, "/queue", payload)
     elif mode == "queue_cancel":
         return sidecar_delete(sidecar_url, f"/queue/{args['job_id']}")
