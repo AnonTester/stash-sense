@@ -444,7 +444,7 @@
 }
 
 .ss-other-matches li.ss-alt-match-item {
-  margin-bottom: 6px;
+  margin-bottom: 10px;
 }
 
 .ss-other-matches a {
@@ -464,25 +464,22 @@
 
 /* Actionable Alt Match Items */
 .ss-alt-match-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 4px 0;
-  gap: 8px;
-}
-
-.ss-alt-match-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+  display: block;
+  padding: 8px;
+  border: 1px solid var(--bs-border-color, #444);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .ss-alt-match-actions {
-  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ss-alt-match-item .ss-match {
+  margin-bottom: 0;
 }
 
 /* Small button variant for alt matches */

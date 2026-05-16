@@ -643,6 +643,7 @@
           const ul = document.createElement('ul');
           for (const m of person.all_matches.slice(1)) {
             const altConf = this.distanceToConfidence(m.distance || (1 - m.confidence) || 0.5);
+            const altConfClass = SS.getConfidenceClass(altConf);
             const altEndpoint = m.endpoint || 'stashdb.org';
             const altStashboxUrl = this._stashboxPerformerUrl(altEndpoint, m.stashdb_id);
             const altGraphqlUrl = this._stashboxGraphqlUrl(altEndpoint);
@@ -659,7 +660,8 @@
               altActionsHtml = `
                 <button class="ss-btn ss-btn-add ss-btn-sm" data-performer-id="${altLocalPerformer.id}" data-scene-id="${sceneId}">
                   Add to Scene
-                </button>`;
+                </button>
+                <span class="ss-local-status">In library as: ${altLocalPerformer.name}</span>`;
             } else {
               altActionsHtml = `
                 <button class="ss-btn ss-btn-create ss-btn-sm"
@@ -673,19 +675,31 @@
                         data-stashdb-id="${m.stashdb_id}"
                         data-scene-id="${sceneId}">
                   Add as...
-                </button>`;
+                </button>
+                <span class="ss-local-status ss-not-in-library">Not in library</span>`;
             }
 
             const li = document.createElement('li');
             li.className = 'ss-alt-match-item';
             li.innerHTML = `
-              <div class="ss-alt-match-left">
-                <a href="${altStashboxUrl}" target="_blank" rel="noopener">${m.name}</a>
-                <span class="ss-alt-confidence">${altConf}%</span>
-                ${altShowAlreadyTagged ? '<span class="ss-tagged-badge ss-tagged-badge-sm">Tagged</span>' : ''}
-              </div>
-              <div class="ss-alt-match-actions">
-                ${altActionsHtml}
+              <div class="ss-match">
+                <div class="ss-match-image">
+                  ${m.image_url ? `<img src="${m.image_url}" alt="${m.name}" loading="lazy" />` : '<div class="ss-no-image">No image</div>'}
+                </div>
+                <div class="ss-match-info">
+                  <h4>${m.name}</h4>
+                  <div class="ss-confidence ${altConfClass}">${altConf}% match</div>
+                  ${altShowAlreadyTagged ? '<span class="ss-tagged-badge ss-tagged-badge-sm">Tagged</span>' : ''}
+                  ${m.country ? `<div class="ss-country">${m.country}</div>` : ''}
+                  <div class="ss-links">
+                    <a href="${altStashboxUrl}" target="_blank" rel="noopener" class="ss-link">
+                      View on ${altEndpoint}
+                    </a>
+                  </div>
+                  <div class="ss-actions ss-alt-match-actions">
+                    ${altActionsHtml}
+                  </div>
+                </div>
               </div>
             `;
             ul.appendChild(li);
@@ -1006,14 +1020,37 @@
               const ul = document.createElement('ul');
               for (const m of face.matches.slice(1)) {
                 const altConf = this.distanceToConfidence(m.distance);
+                const altConfClass = SS.getConfidenceClass(altConf);
                 const altEp = m.endpoint || 'stashdb.org';
                 const altUrl = this._stashboxPerformerUrl(altEp, m.stashdb_id);
+                const altGraphqlUrl = this._stashboxGraphqlUrl(altEp);
+                const altLocalPerformer = await SS.findPerformerByStashDBId(m.stashdb_id, altGraphqlUrl);
                 const li = document.createElement('li');
                 li.className = 'ss-alt-match-item';
                 li.innerHTML = `
-                  <div class="ss-alt-match-left">
-                    <a href="${altUrl}" target="_blank" rel="noopener">${m.name}</a>
-                    <span class="ss-alt-confidence">${altConf}%</span>
+                  <div class="ss-match">
+                    <div class="ss-match-image">
+                      ${m.image_url ? `<img src="${m.image_url}" alt="${m.name}" loading="lazy" />` : '<div class="ss-no-image">No image</div>'}
+                    </div>
+                    <div class="ss-match-info">
+                      <h4>${m.name}</h4>
+                      <div class="ss-confidence ${altConfClass}">${altConf}% match</div>
+                      ${m.country ? `<div class="ss-country">${m.country}</div>` : ''}
+                      <div class="ss-links">
+                        <a href="${altUrl}" target="_blank" rel="noopener" class="ss-link">
+                          View on ${altEp}
+                        </a>
+                      </div>
+                      <div class="ss-actions ss-alt-match-actions">
+                        ${altLocalPerformer
+                          ? `<button class="ss-btn ss-btn-add ss-btn-sm" data-performer-id="${altLocalPerformer.id}" data-image-id="${imageId}">
+                               Add to Image
+                             </button>
+                             <span class="ss-local-status">In library as: ${altLocalPerformer.name}</span>`
+                          : `<span class="ss-local-status ss-not-in-library">Not in library</span>`
+                        }
+                      </div>
+                    </div>
                   </div>
                 `;
                 ul.appendChild(li);
