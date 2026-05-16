@@ -618,6 +618,26 @@ class StashClientUnified:
         data = await self._execute(query)
         return data["allTags"]
 
+    async def get_all_tags_with_aliases(self) -> list[dict]:
+        """Fetch all tags including aliases and stash_ids."""
+        query = """
+        query AllTagsWithAliases {
+          findTags(filter: { per_page: -1 }) {
+            tags {
+              id
+              name
+              aliases
+              stash_ids {
+                endpoint
+                stash_id
+              }
+            }
+          }
+        }
+        """
+        data = await self._execute(query)
+        return data["findTags"]["tags"]
+
     async def search_performers(self, query: str, limit: int = 10) -> list[dict]:
         """Search performers by name/alias using text search."""
         gql = """

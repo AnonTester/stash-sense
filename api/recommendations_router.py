@@ -1319,6 +1319,34 @@ async def _link_existing_tag_by_name_or_alias(
 ) -> Optional[dict]:
     """Find and link an existing local tag matching the StashBox tag by name/alias."""
     local_matches = await stash.search_tags(tag_name, limit=25)
+
+    # Some backends may not include alias hits in search results. Fall back to
+    # a full tag scan for exact name/alias match before creating duplicates.
+    if not any(_tag_matches_name_or_alias(match, tag_name) for match in local_matches):
+        try:
+            try:
+                all_tags = await stash.get_all_tags_with_aliases()
+            except Exception:
+                data = await stash._execute(
+                    """
+                    query AllTagsWithAliases {
+                      findTags(filter: { per_page: -1 }) {
+                        tags {
+                          id
+                          name
+                          aliases
+                          stash_ids { endpoint stash_id }
+                        }
+                      }
+                    }
+                    """
+                )
+                all_tags = data.get("findTags", {}).get("tags", [])
+            local_matches = [*local_matches, *all_tags]
+        except Exception:
+            # If fallback query fails, continue with search results only.
+            pass
+
     for match in local_matches:
         if not _tag_matches_name_or_alias(match, tag_name):
             continue
@@ -1508,6 +1536,7 @@ async def search_entities_action(request: SearchEntitiesRequest):
                 {
                     "id": t["id"],
                     "name": t["name"],
+                    "aliases": t.get("aliases") or [],
                     "linked": any(
                         s["endpoint"] == request.endpoint
                         for s in (t.get("stash_ids") or [])
@@ -1524,6 +1553,7 @@ async def search_entities_action(request: SearchEntitiesRequest):
                 {
                     "id": s["id"],
                     "name": s["name"],
+                    "aliases": s.get("aliases") or [],
                     "linked": any(
                         sid["endpoint"] == request.endpoint
                         for sid in (s.get("stash_ids") or [])

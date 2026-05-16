@@ -732,6 +732,66 @@ class TestUpstreamSceneAnalyzer:
         assert len(recs) == 0
 
     @pytest.mark.asyncio
+    async def test_ignores_tag_add_when_same_local_tag_name_has_different_lookup_id(self, rec_db):
+        """Name-based suppression should prevent add rec even if global tag lookup points to another ID."""
+        stash = MagicMock()
+        stash.get_stashbox_connections = AsyncMock(return_value=[
+            {"endpoint": "https://stashdb.org/graphql", "api_key": "key"},
+        ])
+        stash.get_scenes_for_endpoint = AsyncMock(return_value=[
+            {
+                "id": "1",
+                "title": "Local Title",
+                "date": "2025-01-01",
+                "details": "",
+                "director": "",
+                "code": "",
+                "urls": [],
+                "studio": None,
+                "performers": [],
+                "tags": [
+                    {"id": "10", "name": "Missionary", "stash_ids": []}
+                ],
+                "stash_ids": [
+                    {"endpoint": "https://stashdb.org/graphql", "stash_id": "scene-sb-1"}
+                ],
+            }
+        ])
+        stash.get_all_performers = AsyncMock(return_value=[])
+        # Simulate duplicate-name situation where global lookup resolves to a different local ID.
+        stash.get_all_tags_with_aliases = AsyncMock(return_value=[
+            {"id": "99", "name": "Missionary", "aliases": []}
+        ])
+        stash.get_all_tags = AsyncMock(return_value=[])
+        stash.get_all_studios = AsyncMock(return_value=[])
+
+        upstream_data = {
+            "title": "Local Title",
+            "details": "",
+            "date": "2025-01-01",
+            "director": "",
+            "code": "",
+            "urls": [],
+            "studio": None,
+            "tags": [{"id": "tag-sb-1", "name": "Missionary"}],
+            "performers": [],
+            "deleted": False,
+            "updated": "2025-01-15T00:00:00Z",
+        }
+
+        with patch("stashbox_client.StashBoxClient") as MockSBC:
+            mock_sbc = MagicMock()
+            mock_sbc.get_scene = AsyncMock(return_value=upstream_data)
+            MockSBC.return_value = mock_sbc
+
+            from analyzers.upstream_scene import UpstreamSceneAnalyzer
+            analyzer = UpstreamSceneAnalyzer(stash, rec_db)
+            await analyzer.run()
+
+        recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
+        assert len(recs) == 0
+
+    @pytest.mark.asyncio
     async def test_pending_scene_rec_rechecked_when_upstream_not_updated(self, rec_db):
         """Pending rec is re-compared in incremental mode and auto-resolved after local fix."""
         stash = MagicMock()
@@ -826,6 +886,7 @@ class TestEntityCreation:
         stash.create_performer = AsyncMock(return_value={"id": "200", "name": "New Performer"})
         stash.create_tag = AsyncMock(return_value={"id": "300", "name": "New Tag"})
         stash.search_tags = AsyncMock(return_value=[])
+        stash.get_all_tags_with_aliases = AsyncMock(return_value=[])
         stash.update_tag = AsyncMock(return_value={"id": "300"})
         return stash
 
@@ -904,6 +965,34 @@ class TestEntityCreation:
         assert result["id"] == "42"
         mock_stash.update_tag.assert_called_once_with(
             "42",
+            stash_ids=[{"endpoint": "https://stashdb.org/graphql", "stash_id": "tag-uuid-1"}],
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_tag_from_stashbox_alias_match_when_search_misses(self, mock_stash):
+        """If search misses alias hits, fallback all-tags lookup still links existing tag."""
+        from recommendations_router import _create_tag_from_stashbox
+        mock_stash.search_tags = AsyncMock(return_value=[])
+        mock_stash.get_all_tags_with_aliases = AsyncMock(return_value=[
+            {
+                "id": "88",
+                "name": "Main Tag",
+                "aliases": ["Ass Slapping"],
+                "stash_ids": [],
+            }
+        ])
+
+        result = await _create_tag_from_stashbox(
+            mock_stash,
+            stashbox_data={"name": "Ass Slapping"},
+            endpoint="https://stashdb.org/graphql",
+            stashbox_id="tag-uuid-1",
+        )
+
+        assert result["id"] == "88"
+        mock_stash.create_tag.assert_not_called()
+        mock_stash.update_tag.assert_called_once_with(
+            "88",
             stash_ids=[{"endpoint": "https://stashdb.org/graphql", "stash_id": "tag-uuid-1"}],
         )
 

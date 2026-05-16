@@ -114,11 +114,18 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
 
         # Tags: name only (allTags doesn't include aliases)
         self._tag_name_lookup = {}
-        all_tags = await self.stash.get_all_tags()
+        try:
+            all_tags = await self.stash.get_all_tags_with_aliases()
+        except Exception:
+            all_tags = await self.stash.get_all_tags()
         for t in all_tags:
             name = (t.get("name") or "").strip().lower()
             if name:
                 self._tag_name_lookup[name] = str(t["id"])
+            for alias in (t.get("aliases") or []):
+                alias_lower = str(alias).strip().lower()
+                if alias_lower:
+                    self._tag_name_lookup.setdefault(alias_lower, str(t["id"]))
 
         # Studios: name + aliases
         self._studio_name_lookup = {}
@@ -209,6 +216,7 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
             # when the matched local entity is already on the scene.
             "_local_performer_ids": [str(p.get("id")) for p in (entity.get("performers") or []) if p.get("id") is not None],
             "_local_tag_ids": [str(t.get("id")) for t in (entity.get("tags") or []) if t.get("id") is not None],
+            "_local_tag_names": [(t.get("name") or "").strip().lower() for t in (entity.get("tags") or []) if (t.get("name") or "").strip()],
         }
 
     def _prune_added_changes_already_present(
@@ -220,6 +228,7 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
         """Remove add-suggestions when the matched local entity is already on the scene."""
         local_performer_ids = set(local_data.get("_local_performer_ids") or [])
         local_tag_ids = set(local_data.get("_local_tag_ids") or [])
+        local_tag_names = set(local_data.get("_local_tag_names") or [])
 
         performer_changes = performer_changes or {"added": [], "removed": [], "alias_changed": []}
         tag_changes = tag_changes or {"added": [], "removed": []}
@@ -235,9 +244,12 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
 
         pruned_added_tags = []
         for tag in tag_changes.get("added", []):
+            tag_name = (tag.get("name") or "").strip().lower()
+            if tag_name and tag_name in local_tag_names:
+                continue
             match_id = None
             if self._tag_name_lookup:
-                match_id = self._tag_name_lookup.get((tag.get("name") or "").strip().lower())
+                match_id = self._tag_name_lookup.get(tag_name)
             if match_id and str(match_id) in local_tag_ids:
                 continue
             pruned_added_tags.append(tag)

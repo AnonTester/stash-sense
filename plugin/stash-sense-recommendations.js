@@ -4377,6 +4377,34 @@
             trigger.style.display = ''; // Show Link button as fallback
             return;
           }
+
+          function normalizeEndpoint(value) {
+            if (!value) return '';
+            let v = String(value).trim().toLowerCase().replace(/\/+$/, '');
+            if (v.startsWith('https://')) v = v.slice('https://'.length);
+            else if (v.startsWith('http://')) v = v.slice('http://'.length);
+            if (v.endsWith('/graphql')) v = v.slice(0, -'/graphql'.length);
+            return v;
+          }
+
+          function hasExactStashLink(result) {
+            const targetEndpoint = normalizeEndpoint(endpoint);
+            const targetStashId = String(stashboxId || '');
+            return (result.stash_ids || []).some(sid =>
+              normalizeEndpoint(sid.endpoint) === targetEndpoint &&
+              String(sid.stash_id || '') === targetStashId
+            );
+          }
+
+          function matchesInitialSearch(result) {
+            const needle = (initialSearch || '').trim().toLowerCase();
+            if (!needle) return false;
+            const name = String(result.name || '').trim().toLowerCase();
+            if (name === needle) return true;
+            const aliases = Array.isArray(result.aliases) ? result.aliases : [];
+            return aliases.some(a => String(a || '').trim().toLowerCase() === needle);
+          }
+
           resultsList.innerHTML = '';
           results.forEach(r => {
             const item = document.createElement('div');
@@ -4401,10 +4429,18 @@
             resultsList.appendChild(item);
           });
 
-          // Pre-select if exactly one non-linked result with exact name match
-          const nonLinked = results.filter(r => !r.linked);
-          if (nonLinked.length === 1 && nonLinked[0].name.toLowerCase() === initialSearch.toLowerCase()) {
-            const r = nonLinked[0];
+          // If exact stash-id link already exists, mark as matched immediately.
+          const exactLinked = results.find(r => matchesInitialSearch(r) && hasExactStashLink(r));
+          if (exactLinked) {
+            panel.style.display = 'none';
+            onMatch(exactLinked.id, exactLinked.name);
+            return;
+          }
+
+          // Pre-select if exactly one non-linked result with exact name/alias match
+          const nonLinkedMatches = results.filter(r => !r.linked && matchesInitialSearch(r));
+          if (nonLinkedMatches.length === 1) {
+            const r = nonLinkedMatches[0];
             // Auto-link the exact match
             try {
               await RecommendationsAPI.linkEntity(entityType, r.id, endpoint, stashboxId);
