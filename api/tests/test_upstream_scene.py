@@ -678,6 +678,8 @@ class TestEntityCreation:
         stash.create_studio = AsyncMock(return_value={"id": "100", "name": "New Studio"})
         stash.create_performer = AsyncMock(return_value={"id": "200", "name": "New Performer"})
         stash.create_tag = AsyncMock(return_value={"id": "300", "name": "New Tag"})
+        stash.search_tags = AsyncMock(return_value=[])
+        stash.update_tag = AsyncMock(return_value={"id": "300"})
         return stash
 
     @pytest.mark.asyncio
@@ -708,6 +710,55 @@ class TestEntityCreation:
         )
         assert result["id"] == "300"
         mock_stash.create_tag.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_tag_from_stashbox_links_existing_name_match(self, mock_stash):
+        """Links stash_id to an existing local tag with same name instead of creating."""
+        from recommendations_router import _create_tag_from_stashbox
+        mock_stash.search_tags = AsyncMock(return_value=[
+            {"id": "42", "name": "HD", "aliases": [], "stash_ids": []}
+        ])
+
+        result = await _create_tag_from_stashbox(
+            mock_stash,
+            stashbox_data={"name": "HD"},
+            endpoint="https://stashdb.org/graphql",
+            stashbox_id="tag-uuid-1",
+        )
+
+        assert result["id"] == "42"
+        mock_stash.create_tag.assert_not_called()
+        mock_stash.update_tag.assert_called_once_with(
+            "42",
+            stash_ids=[{"endpoint": "https://stashdb.org/graphql", "stash_id": "tag-uuid-1"}],
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_tag_from_stashbox_duplicate_error_falls_back_to_link(self, mock_stash):
+        """If create fails with duplicate-name error, fallback links existing local tag."""
+        from recommendations_router import _create_tag_from_stashbox
+        mock_stash.search_tags = AsyncMock(side_effect=[
+            [],
+            [{"id": "42", "name": "Femaleorgasm", "aliases": [], "stash_ids": []}],
+        ])
+        mock_stash.create_tag = AsyncMock(
+            side_effect=RuntimeError(
+                "GraphQL error: [{'message': \"tag with name 'Femaleorgasm' already exists\", 'path': ['tagCreate']}]"
+            )
+        )
+
+        result = await _create_tag_from_stashbox(
+            mock_stash,
+            stashbox_data={"name": "Femaleorgasm"},
+            endpoint="https://stashdb.org/graphql",
+            stashbox_id="tag-uuid-1",
+        )
+
+        assert result["id"] == "42"
+        mock_stash.update_tag.assert_called_once_with(
+            "42",
+            stash_ids=[{"endpoint": "https://stashdb.org/graphql", "stash_id": "tag-uuid-1"}],
+        )
 
 
 class TestUpdateSceneAction:

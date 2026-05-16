@@ -1274,15 +1274,96 @@ async def _create_performer_from_stashbox(stash, stashbox_data: dict, endpoint: 
     return await stash.create_performer(**fields)
 
 
+def _normalize_endpoint_for_compare(endpoint: Optional[str]) -> str:
+    """Normalize endpoint for tolerant stash-id endpoint matching."""
+    if not endpoint:
+        return ""
+    value = str(endpoint).strip().lower().rstrip("/")
+    if value.startswith("https://"):
+        value = value[len("https://"):]
+    elif value.startswith("http://"):
+        value = value[len("http://"):]
+    if value.endswith("/graphql"):
+        value = value[:-len("/graphql")]
+    return value
+
+
+def _stash_id_link_exists(stash_ids: list[dict], endpoint: str, stashbox_id: str) -> bool:
+    """Return True if stash_ids already contain the endpoint + stashbox_id mapping."""
+    endpoint_norm = _normalize_endpoint_for_compare(endpoint)
+    stash_id_str = str(stashbox_id)
+    for sid in stash_ids or []:
+        sid_endpoint_norm = _normalize_endpoint_for_compare(sid.get("endpoint"))
+        sid_stash_id = str(sid.get("stash_id", ""))
+        if sid_endpoint_norm == endpoint_norm and sid_stash_id == stash_id_str:
+            return True
+    return False
+
+
+def _tag_matches_name_or_alias(tag: dict, expected_name: str) -> bool:
+    """Match tag by exact normalized name or alias."""
+    name_norm = (expected_name or "").strip().lower()
+    if not name_norm:
+        return False
+    if (tag.get("name") or "").strip().lower() == name_norm:
+        return True
+    aliases = {str(a).strip().lower() for a in (tag.get("aliases") or []) if str(a).strip()}
+    return name_norm in aliases
+
+
+async def _link_existing_tag_by_name_or_alias(
+    stash,
+    tag_name: str,
+    endpoint: str,
+    stashbox_id: str,
+) -> Optional[dict]:
+    """Find and link an existing local tag matching the StashBox tag by name/alias."""
+    local_matches = await stash.search_tags(tag_name, limit=25)
+    for match in local_matches:
+        if not _tag_matches_name_or_alias(match, tag_name):
+            continue
+        current_stash_ids = list(match.get("stash_ids") or [])
+        if not _stash_id_link_exists(current_stash_ids, endpoint, stashbox_id):
+            current_stash_ids.append({"endpoint": endpoint, "stash_id": stashbox_id})
+            await stash.update_tag(match["id"], stash_ids=current_stash_ids)
+            logger.warning(
+                "Linked existing tag '%s' (ID: %s) to StashBox %s on %s",
+                match.get("name"),
+                match.get("id"),
+                stashbox_id,
+                endpoint,
+            )
+        return {"id": match["id"], "name": match.get("name")}
+    return None
+
+
 async def _create_tag_from_stashbox(stash, stashbox_data: dict, endpoint: str, stashbox_id: str) -> dict:
-    """Create a local tag from StashBox data with stash_id link."""
-    fields = {"name": stashbox_data.get("name", "")}
+    """Create (or link) a local tag from StashBox data with stash_id link."""
+    tag_name = (stashbox_data.get("name") or "").strip()
+    if not tag_name:
+        raise HTTPException(status_code=422, detail="Tag name is required")
+
+    # Prefer linking an existing local tag (exact name/alias) instead of failing create.
+    existing = await _link_existing_tag_by_name_or_alias(stash, tag_name, endpoint, stashbox_id)
+    if existing:
+        return existing
+
+    fields = {"name": tag_name}
     if stashbox_data.get("description"):
         fields["description"] = stashbox_data["description"]
     if stashbox_data.get("aliases"):
         fields["aliases"] = stashbox_data["aliases"]
     fields["stash_ids"] = [{"endpoint": endpoint, "stash_id": stashbox_id}]
-    return await stash.create_tag(**fields)
+    try:
+        return await stash.create_tag(**fields)
+    except RuntimeError as exc:
+        # Handle race/duplicate conflicts: tag was created/exists locally already.
+        if "already exists" not in str(exc).lower():
+            raise
+        existing = await _link_existing_tag_by_name_or_alias(stash, tag_name, endpoint, stashbox_id)
+        if existing:
+            return existing
+        raise
 
 
 async def _apply_scene_update(
