@@ -232,6 +232,25 @@ class TestSceneFieldMapper:
         assert result["tag_changes"]["added"] == []
         assert result["tag_changes"]["removed"] == []
 
+    def test_diff_scene_tags_order_and_case_do_not_trigger_changes(self):
+        """Tag set comparison ignores ordering and stash-box ID case differences."""
+        from upstream_field_mapper import diff_scene_fields
+
+        local = {
+            "title": "Same", "date": "", "details": "", "director": "", "code": "", "urls": [],
+            "studio": None, "performers": [],
+            "tags": [{"id": "tag-a"}, {"id": "TAG-B"}],
+        }
+        upstream = {
+            "title": "Same", "date": "", "details": "", "director": "", "code": "", "urls": [],
+            "studio": None, "performers": [],
+            "tags": [{"id": "tag-b"}, {"id": "TAG-A"}],
+        }
+
+        result = diff_scene_fields(local, upstream, None, {"tags"})
+        assert result["tag_changes"]["added"] == []
+        assert result["tag_changes"]["removed"] == []
+
     def test_diff_scene_has_any_changes(self):
         """has_any_scene_changes returns True when there are changes."""
         from upstream_field_mapper import diff_scene_fields
@@ -588,6 +607,66 @@ class TestUpstreamSceneAnalyzer:
             result = await analyzer.run()
 
         # No recommendation — fansdb IDs match correctly
+        recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
+        assert len(recs) == 0
+
+    @pytest.mark.asyncio
+    async def test_endpoint_normalization_avoids_false_tag_additions(self, rec_db):
+        """Trailing slash endpoint variants should still match linked local tag stash_ids."""
+        stash = MagicMock()
+        stash.get_stashbox_connections = AsyncMock(return_value=[
+            {"endpoint": "https://stashdb.org/graphql", "api_key": "key"},
+        ])
+        stash.get_scenes_for_endpoint = AsyncMock(return_value=[
+            {
+                "id": "1",
+                "title": "Local Title",
+                "date": "2025-01-01",
+                "details": "",
+                "director": "",
+                "code": "",
+                "urls": [],
+                "studio": None,
+                "performers": [],
+                "tags": [
+                    {
+                        "id": "10",
+                        "name": "Linked Tag",
+                        "stash_ids": [{"endpoint": "https://stashdb.org/graphql/", "stash_id": "tag-sb-1"}],
+                    }
+                ],
+                "stash_ids": [
+                    {"endpoint": "https://stashdb.org/graphql", "stash_id": "scene-sb-1"}
+                ],
+            }
+        ])
+        stash.get_all_performers = AsyncMock(return_value=[])
+        stash.get_all_tags = AsyncMock(return_value=[])
+        stash.get_all_studios = AsyncMock(return_value=[])
+
+        upstream_data = {
+            "title": "Local Title",
+            "details": "",
+            "date": "2025-01-01",
+            "director": "",
+            "code": "",
+            "urls": [],
+            "studio": None,
+            "tags": [{"id": "tag-sb-1", "name": "Linked Tag"}],
+            "performers": [],
+            "deleted": False,
+            "updated": "2025-01-15T00:00:00Z",
+        }
+
+        with patch("stashbox_client.StashBoxClient") as MockSBC:
+            mock_sbc = MagicMock()
+            mock_sbc.get_scene = AsyncMock(return_value=upstream_data)
+            MockSBC.return_value = mock_sbc
+
+            from analyzers.upstream_scene import UpstreamSceneAnalyzer
+            analyzer = UpstreamSceneAnalyzer(stash, rec_db)
+            await analyzer.run()
+
         recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
         assert len(recs) == 0
 

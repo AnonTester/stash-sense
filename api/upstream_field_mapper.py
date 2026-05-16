@@ -492,6 +492,13 @@ def _is_empty(value) -> bool:
     return False
 
 
+def _normalize_entity_id(value) -> str:
+    """Normalize stash-box entity IDs for stable set comparisons."""
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
 def _values_equal(
     local_value, upstream_value, merge_type: str,
     field_name: str = "", entity_name: str = "",
@@ -795,18 +802,30 @@ def _studio_changed(local_studio, upstream_studio, snapshot):
 
 def _diff_performers(local_perfs, upstream_perfs, snapshot_perfs):
     """Set-based performer diff with alias tracking."""
-    local_by_id = {p["id"]: p for p in local_perfs}
-    upstream_by_id = {p["id"]: p for p in upstream_perfs}
+    local_by_id = {
+        _normalize_entity_id(p.get("id")): p
+        for p in local_perfs
+        if _normalize_entity_id(p.get("id"))
+    }
+    upstream_by_id = {
+        _normalize_entity_id(p.get("id")): p
+        for p in upstream_perfs
+        if _normalize_entity_id(p.get("id"))
+    }
 
     # 3-way: only flag changes if upstream differs from snapshot
     if snapshot_perfs is not None:
-        snapshot_by_id = {p["id"]: p for p in snapshot_perfs}
+        snapshot_by_id = {
+            _normalize_entity_id(p.get("id")): p
+            for p in snapshot_perfs
+            if _normalize_entity_id(p.get("id"))
+        }
         upstream_ids = set(upstream_by_id.keys())
         snapshot_ids = set(snapshot_by_id.keys())
         if upstream_ids == snapshot_ids:
             # Check alias changes too
             aliases_same = all(
-                upstream_by_id[pid].get("as") == snapshot_by_id[pid].get("as")
+                (upstream_by_id[pid].get("as") or "") == (snapshot_by_id[pid].get("as") or "")
                 for pid in upstream_ids
             )
             if aliases_same:
@@ -839,17 +858,28 @@ def _diff_performers(local_perfs, upstream_perfs, snapshot_perfs):
 
 def _diff_tags(local_tags, upstream_tags, snapshot_tags):
     """Set-based tag diff."""
-    local_ids = {t["id"] for t in local_tags}
-    upstream_ids = {t["id"] for t in upstream_tags}
+    local_by_id = {
+        _normalize_entity_id(t.get("id")): t
+        for t in local_tags
+        if _normalize_entity_id(t.get("id"))
+    }
+    upstream_by_id = {
+        _normalize_entity_id(t.get("id")): t
+        for t in upstream_tags
+        if _normalize_entity_id(t.get("id"))
+    }
+    local_ids = set(local_by_id.keys())
+    upstream_ids = set(upstream_by_id.keys())
 
     # 3-way: only flag if upstream set changed from snapshot
     if snapshot_tags is not None:
-        snapshot_ids = {t["id"] for t in snapshot_tags}
+        snapshot_ids = {
+            _normalize_entity_id(t.get("id"))
+            for t in snapshot_tags
+            if _normalize_entity_id(t.get("id"))
+        }
         if upstream_ids == snapshot_ids:
             return {"added": [], "removed": []}
-
-    upstream_by_id = {t["id"]: t for t in upstream_tags}
-    local_by_id = {t["id"]: t for t in local_tags}
 
     added = [upstream_by_id[tid] for tid in upstream_ids - local_ids]
     removed = [local_by_id[tid] for tid in local_ids - upstream_ids]

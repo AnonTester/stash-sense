@@ -114,6 +114,11 @@ class TestUpdateSetting:
         assert resp.status_code == 200
         assert resp.json()["value"] is False
 
+    def test_update_upstream_scene_gender_toggle(self, client):
+        resp = client.put("/settings/upstream_scene_gender_male_enabled", json={"value": False})
+        assert resp.status_code == 200
+        assert resp.json()["value"] is False
+
 
 class TestBulkUpdate:
     """Test PUT /settings (bulk)."""

@@ -875,6 +875,13 @@
     return settingsData?.categories?.upstream_sync?.settings?.[settingKey]?.value ?? true;
   }
 
+  function getAvailableUpstreamGenderSettings() {
+    const availableSettings = settingsData?.categories?.upstream_sync?.settings || {};
+    return UPSTREAM_GENDER_SETTINGS.filter(setting =>
+      Object.prototype.hasOwnProperty.call(availableSettings, setting.key)
+    );
+  }
+
   function renderPerformerGenderSettingsRow() {
     const row = SS.createElement('div', { className: 'ss-setting-row-vertical' });
 
@@ -895,7 +902,17 @@
       attrs: { style: 'margin-top:10px;' },
     });
 
-    for (const setting of UPSTREAM_GENDER_SETTINGS) {
+    const availableGenderSettings = getAvailableUpstreamGenderSettings();
+    if (availableGenderSettings.length === 0) {
+      const unavailable = SS.createElement('div', {
+        className: 'ss-setting-hint',
+        textContent: 'Gender filters are unavailable on the current sidecar version.',
+      });
+      row.appendChild(unavailable);
+      return row;
+    }
+
+    for (const setting of availableGenderSettings) {
       const label = SS.createElement('label', { className: 'ss-upstream-field-label' });
       const cb = SS.createElement('input', { attrs: { type: 'checkbox' } });
       cb.checked = !!getUpstreamGenderSettingValue(setting.key);

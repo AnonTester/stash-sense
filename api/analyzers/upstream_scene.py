@@ -9,7 +9,6 @@ import logging
 from typing import Optional
 
 from .base_upstream import BaseUpstreamAnalyzer
-from config import get_stashbox_shortname
 from settings import get_setting
 from upstream_field_mapper import (
     normalize_upstream_scene,
@@ -45,6 +44,25 @@ def _normalize_performer_gender(gender: Optional[str]) -> Optional[str]:
         "UNSPECIFIED": "UNKNOWN",
     }
     return aliases.get(normalized, normalized)
+
+
+def _normalize_endpoint_for_compare(endpoint: Optional[str]) -> str:
+    """Normalize endpoint values for resilient stash_id endpoint matching."""
+    if not endpoint:
+        return ""
+    value = str(endpoint).strip().lower().rstrip("/")
+    if value.startswith("https://"):
+        value = value[len("https://"):]
+    elif value.startswith("http://"):
+        value = value[len("http://"):]
+    if value.endswith("/graphql"):
+        value = value[:-len("/graphql")]
+    return value
+
+
+def _endpoint_matches(left: Optional[str], right: Optional[str]) -> bool:
+    """Compare two stash-box endpoints while ignoring formatting differences."""
+    return _normalize_endpoint_for_compare(left) == _normalize_endpoint_for_compare(right)
 
 
 def _has_scene_changes(result: dict) -> bool:
@@ -147,7 +165,7 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
         for p in (entity.get("performers") or []):
             perf_stash_id = None
             for sid in (p.get("stash_ids") or []):
-                if sid["endpoint"] == endpoint:
+                if _endpoint_matches(sid.get("endpoint"), endpoint):
                     perf_stash_id = sid["stash_id"]
                     break
             if perf_stash_id:
@@ -161,7 +179,7 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
         tags = []
         for t in (entity.get("tags") or []):
             for sid in (t.get("stash_ids") or []):
-                if sid["endpoint"] == endpoint:
+                if _endpoint_matches(sid.get("endpoint"), endpoint):
                     tags.append({"id": sid["stash_id"], "name": t.get("name")})
                     break
 
@@ -169,7 +187,7 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
         local_studio = entity.get("studio")
         if local_studio:
             for sid in (local_studio.get("stash_ids") or []):
-                if sid["endpoint"] == endpoint:
+                if _endpoint_matches(sid.get("endpoint"), endpoint):
                     studio = {"id": sid["stash_id"], "name": local_studio.get("name")}
                     break
 
