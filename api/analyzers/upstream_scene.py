@@ -65,6 +65,13 @@ def _endpoint_matches(left: Optional[str], right: Optional[str]) -> bool:
     return _normalize_endpoint_for_compare(left) == _normalize_endpoint_for_compare(right)
 
 
+def _normalize_stashbox_id(value: Optional[str]) -> str:
+    """Normalize stash-box IDs for stable case-insensitive comparisons."""
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
 def _has_scene_changes(result: dict) -> bool:
     """Check if a scene diff result has any actual changes."""
     if result.get("changes"):
@@ -217,6 +224,15 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
             # Local scene membership (local IDs) used to suppress "add" suggestions
             # when the matched local entity is already on the scene.
             "_local_performer_ids": [str(p.get("id")) for p in (entity.get("performers") or []) if p.get("id") is not None],
+            "_local_performer_stash_by_local_id": {
+                str(p.get("id")): _normalize_stashbox_id(next((
+                    sid.get("stash_id")
+                    for sid in (p.get("stash_ids") or [])
+                    if _endpoint_matches(sid.get("endpoint"), endpoint)
+                ), None))
+                for p in (entity.get("performers") or [])
+                if p.get("id") is not None
+            },
             "_local_tag_ids": [str(t.get("id")) for t in (entity.get("tags") or []) if t.get("id") is not None],
             "_local_tag_names": [(t.get("name") or "").strip().lower() for t in (entity.get("tags") or []) if (t.get("name") or "").strip()],
         }
@@ -229,11 +245,17 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
     ) -> tuple[dict, dict]:
         """Remove add-suggestions when the matched local entity is already on the scene."""
         local_performer_ids = set(local_data.get("_local_performer_ids") or [])
+        local_performer_stash_by_local_id = local_data.get("_local_performer_stash_by_local_id") or {}
         local_tag_ids = set(local_data.get("_local_tag_ids") or [])
         local_tag_names = set(local_data.get("_local_tag_names") or [])
 
         performer_changes = performer_changes or {"added": [], "removed": [], "alias_changed": []}
         tag_changes = tag_changes or {"added": [], "removed": []}
+        removed_performer_stash_ids = {
+            _normalize_stashbox_id(p.get("id"))
+            for p in performer_changes.get("removed", [])
+            if _normalize_stashbox_id(p.get("id"))
+        }
 
         pruned_added_performers = []
         for perf in performer_changes.get("added", []):
@@ -241,7 +263,13 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
             if self._performer_name_lookup:
                 match_id = self._performer_name_lookup.get((perf.get("name") or "").strip().lower())
             if match_id and str(match_id) in local_performer_ids:
-                continue
+                # Keep replacement additions when the matched local performer is also
+                # being removed by stashbox ID in this same diff (merge/relink case).
+                matched_local_stash_id = _normalize_stashbox_id(
+                    local_performer_stash_by_local_id.get(str(match_id))
+                )
+                if matched_local_stash_id not in removed_performer_stash_ids:
+                    continue
             pruned_added_performers.append(perf)
 
         pruned_added_tags = []

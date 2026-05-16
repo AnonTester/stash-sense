@@ -394,6 +394,71 @@ class TestUpstreamSceneAnalyzer:
         assert len(recs[0].details["performer_changes"]["added"]) == 1
 
     @pytest.mark.asyncio
+    async def test_keeps_added_performer_when_it_replaces_removed_stashbox_id(self, mock_stash, rec_db):
+        """Do not prune added performer in merge/relink replacements (old ID removed, new ID added)."""
+        mock_stash.get_scenes_for_endpoint = AsyncMock(return_value=[
+            {
+                "id": "1",
+                "title": "Local Title",
+                "date": "2025-01-01",
+                "details": "",
+                "director": "",
+                "code": "",
+                "urls": [],
+                "studio": None,
+                "performers": [
+                    {
+                        "id": "20",
+                        "name": "Merged Performer",
+                        "gender": "FEMALE",
+                        "stash_ids": [
+                            {"endpoint": "https://stashdb.org/graphql", "stash_id": "perf-old-id"}
+                        ],
+                    }
+                ],
+                "tags": [],
+                "stash_ids": [
+                    {"endpoint": "https://stashdb.org/graphql", "stash_id": "sb-scene-1"}
+                ],
+            }
+        ])
+        # Name lookup resolves this upstream name to the already-linked local performer.
+        mock_stash.get_all_performers = AsyncMock(return_value=[
+            {"id": "20", "name": "Merged Performer", "alias_list": []}
+        ])
+
+        upstream_data = {
+            "title": "Local Title",
+            "details": "",
+            "date": "2025-01-01",
+            "director": "",
+            "code": "",
+            "urls": [],
+            "studio": None,
+            "tags": [],
+            "performers": [
+                {"performer": {"id": "perf-new-id", "name": "Merged Performer", "gender": "FEMALE"}, "as": None},
+            ],
+            "deleted": False,
+            "updated": "2025-01-15T00:00:00Z",
+        }
+
+        with patch("stashbox_client.StashBoxClient") as MockSBC:
+            mock_sbc = MagicMock()
+            mock_sbc.get_scene = AsyncMock(return_value=upstream_data)
+            MockSBC.return_value = mock_sbc
+
+            from analyzers.upstream_scene import UpstreamSceneAnalyzer
+            analyzer = UpstreamSceneAnalyzer(mock_stash, rec_db)
+            await analyzer.run()
+
+        recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
+        assert len(recs) == 1
+        perf_changes = recs[0].details["performer_changes"]
+        assert [p["id"] for p in perf_changes["removed"]] == ["perf-old-id"]
+        assert [p["id"] for p in perf_changes["added"]] == ["perf-new-id"]
+
+    @pytest.mark.asyncio
     async def test_filters_unselected_performer_genders(self, mock_stash, rec_db):
         """Performer add/remove changes are filtered by selected genders."""
         mock_stash.get_scenes_for_endpoint = AsyncMock(return_value=[
