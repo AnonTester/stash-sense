@@ -231,7 +231,7 @@ class TestUpstreamPerformerAnalyzer:
         assert result.recommendations_created == 0
 
     @pytest.mark.asyncio
-    async def test_skips_deleted_upstream_performers(self, mock_stash, rec_db):
+    async def test_surfaces_deleted_upstream_performers(self, mock_stash, rec_db):
         from analyzers.upstream_performer import UpstreamPerformerAnalyzer
         mock_stash.get_performers_for_endpoint = AsyncMock(return_value=[
             {
@@ -261,4 +261,67 @@ class TestUpstreamPerformerAnalyzer:
             mock_sbc.get_performer = AsyncMock(return_value=upstream)
             MockSBC.return_value = mock_sbc
             result = await analyzer.run()
-        assert result.recommendations_created == 0
+        assert result.recommendations_created == 1
+        recs = rec_db.get_recommendations(type="upstream_performer_changes")
+        assert len(recs) == 1
+        assert recs[0].details["upstream_status"] == "deleted"
+        assert any(c["field"] == "_upstream_status" for c in recs[0].details["changes"])
+
+    @pytest.mark.asyncio
+    async def test_surfaces_merged_upstream_performer_with_relink_and_field_sync(self, mock_stash, rec_db):
+        from analyzers.upstream_performer import UpstreamPerformerAnalyzer
+
+        mock_stash.get_performers_for_endpoint = AsyncMock(return_value=[
+            {
+                "id": "42", "name": "Old Performer", "disambiguation": "",
+                "alias_list": ["OP"], "gender": "FEMALE", "birthdate": None,
+                "death_date": None, "ethnicity": None, "country": "US",
+                "eye_color": None, "hair_color": None, "height_cm": 165,
+                "measurements": "", "fake_tits": "", "career_length": "",
+                "tattoos": "", "piercings": "", "details": "", "urls": [],
+                "favorite": False, "image_path": None,
+                "stash_ids": [{"endpoint": "https://stashdb.org/graphql", "stash_id": "old-sb-id"}],
+            }
+        ])
+
+        merged_stub = {
+            "id": "old-sb-id", "name": "Old Performer", "disambiguation": "",
+            "aliases": ["OP"], "gender": "FEMALE", "birth_date": None, "death_date": None,
+            "ethnicity": None, "country": "US", "eye_color": None, "hair_color": None,
+            "height": 165, "cup_size": None, "band_size": None, "waist_size": None,
+            "hip_size": None, "breast_type": None, "career_start_year": None,
+            "career_end_year": None, "tattoos": [], "piercings": [], "urls": [],
+            "is_favorite": False, "deleted": False, "merged_into_id": "new-sb-id",
+            "created": "2024-01-01T00:00:00Z", "updated": "2026-01-15T10:00:00Z",
+        }
+        merged_target = {
+            "id": "new-sb-id", "name": "New Performer Name", "disambiguation": "",
+            "aliases": ["NP"], "gender": "FEMALE", "birth_date": None, "death_date": None,
+            "ethnicity": None, "country": "CA", "eye_color": None, "hair_color": None,
+            "height": 170, "cup_size": None, "band_size": None, "waist_size": None,
+            "hip_size": None, "breast_type": None, "career_start_year": None,
+            "career_end_year": None, "tattoos": [], "piercings": [], "urls": [],
+            "is_favorite": False, "deleted": False, "merged_into_id": None,
+            "created": "2024-01-01T00:00:00Z", "updated": "2026-02-01T10:00:00Z",
+        }
+
+        analyzer = UpstreamPerformerAnalyzer(mock_stash, rec_db)
+        with patch("stashbox_client.StashBoxClient") as MockSBC:
+            mock_sbc = MagicMock()
+            mock_sbc.get_performer = AsyncMock(side_effect=[merged_stub, merged_target])
+            MockSBC.return_value = mock_sbc
+            result = await analyzer.run()
+
+        assert result.recommendations_created == 1
+        recs = rec_db.get_recommendations(type="upstream_performer_changes")
+        assert len(recs) == 1
+        details = recs[0].details
+        assert details["upstream_status"] == "merged"
+        assert details["merged_target_stashbox_id"] == "new-sb-id"
+        assert details["relink"]["old_stashbox_id"] == "old-sb-id"
+        assert details["relink"]["new_stashbox_id"] == "new-sb-id"
+        assert details["relink"]["stash_ids_after_relink"] == [
+            {"endpoint": "https://stashdb.org/graphql", "stash_id": "new-sb-id"}
+        ]
+        assert any(c["field"] == "_stashbox_id" for c in details["changes"])
+        assert any(c["field"] == "country" and c["upstream_value"] == "CA" for c in details["changes"])

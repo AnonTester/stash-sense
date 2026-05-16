@@ -100,6 +100,37 @@ def _clear_caches():
     recommendations_router._entity_name_cache.clear()
 
 
+class TestPerformerRelinkAction:
+    """Performer update action should allow stash_id relink updates."""
+
+    def test_applies_stash_id_relink_via_update_performer(self, app):
+        with patch("recommendations_router.get_stash_client") as mock_get_stash:
+            mock_stash = MagicMock()
+            mock_stash.update_performer = AsyncMock(return_value={"id": "50"})
+            mock_get_stash.return_value = mock_stash
+
+            client = TestClient(app)
+            resp = client.post("/recommendations/actions/update-performer", json={
+                "performer_id": "50",
+                "fields": {
+                    "stash_ids": [
+                        {"endpoint": "https://stashdb.org/graphql", "stash_id": "new-sb-id"},
+                        {"endpoint": "https://fansdb.cc/graphql", "stash_id": "fansdb-id"},
+                    ]
+                },
+            })
+
+            assert resp.status_code == 200
+            assert resp.json()["success"] is True
+            mock_stash.update_performer.assert_called_once_with(
+                "50",
+                stash_ids=[
+                    {"endpoint": "https://stashdb.org/graphql", "stash_id": "new-sb-id"},
+                    {"endpoint": "https://fansdb.cc/graphql", "stash_id": "fansdb-id"},
+                ],
+            )
+
+
 class TestPerformerNameConflictAutoMerge:
     """When updating a performer name conflicts with an existing performer,
     auto-merge the conflicting performer into the one being updated."""

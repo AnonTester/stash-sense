@@ -1143,9 +1143,20 @@
     }
 
     if (rec.type === 'upstream_performer_changes') {
+      const upstreamStatus = details.upstream_status || 'active';
       const realChanges = filterRealChanges(details.changes);
       const changeCount = realChanges.length;
       const changedFields = realChanges.map(c => c.field_label).join(', ');
+      let subtitle = `${changeCount} field${changeCount !== 1 ? 's' : ''} changed · ${details.endpoint_name || ''}`;
+      if (upstreamStatus === 'merged') {
+        subtitle = `Merged upstream performer · relink required · ${details.endpoint_name || ''}`;
+      } else if (upstreamStatus === 'deleted') {
+        subtitle = `Deleted upstream performer · review required · ${details.endpoint_name || ''}`;
+      }
+      const fieldSummary = changedFields
+        || (upstreamStatus === 'deleted'
+          ? 'Upstream performer was deleted'
+          : (upstreamStatus === 'merged' ? 'Upstream performer merged into a new ID' : ''));
 
       return SS.createElement('div', {
         className: 'ss-rec-card ss-rec-upstream',
@@ -1155,9 +1166,9 @@
             <div class="ss-rec-card-info">
               <div class="ss-rec-card-title">Upstream Changes: ${details.performer_name || 'Unknown'}</div>
               <div class="ss-rec-card-subtitle">
-                ${changeCount} field${changeCount !== 1 ? 's' : ''} changed · ${details.endpoint_name || ''}
+                ${subtitle}
               </div>
-              <div class="ss-rec-card-fields">${changedFields}</div>
+              <div class="ss-rec-card-fields">${fieldSummary}</div>
             </div>
           </div>
         `,
@@ -2151,6 +2162,11 @@
     const details = rec.details;
     const rawChanges = details.changes || [];
     const performerId = details.performer_id;
+    const upstreamStatus = details.upstream_status || 'active';
+    const relink = details.relink || null;
+    const needsRelink = upstreamStatus === 'merged'
+      && Array.isArray(relink?.stash_ids_after_relink)
+      && relink.stash_ids_after_relink.length > 0;
 
     // Check if performer still exists in Stash (may have been deleted)
     try {
@@ -2170,8 +2186,9 @@
 
     const changes = filterRealChanges(rawChanges);
 
-    // If all changes were filtered out, auto-resolve and go back
-    if (changes.length === 0) {
+    // If all changes were filtered out, auto-resolve only for normal upstream updates.
+    // For merged/deleted upstream performers we keep the rec visible for explicit user action.
+    if (changes.length === 0 && upstreamStatus === 'active') {
       try {
         await RecommendationsAPI.resolve(rec.id, 'accepted_no_changes', { note: 'All differences were cosmetic' });
       } catch (_) {}
@@ -2219,6 +2236,25 @@
     `;
     headerDiv.appendChild(createInfoIcon(() => showHelpModal('Upstream Performer Changes', HELP_UPSTREAM_DETAIL)));
     wrapper.appendChild(headerDiv);
+
+    if (upstreamStatus === 'merged' && relink) {
+      const mergeNotice = document.createElement('div');
+      mergeNotice.className = 'ss-scene-local-context';
+      mergeNotice.innerHTML = `
+        <span class="ss-scene-local-context-label">Merged Upstream:</span>
+        performer ID changed from <code>${escapeHtml(relink.old_stashbox_id || details.stash_box_id || '')}</code>
+        to <code>${escapeHtml(relink.new_stashbox_id || '')}</code>. Applying will relink this local performer.
+      `;
+      wrapper.appendChild(mergeNotice);
+    } else if (upstreamStatus === 'deleted') {
+      const deletedNotice = document.createElement('div');
+      deletedNotice.className = 'ss-scene-local-context';
+      deletedNotice.innerHTML = `
+        <span class="ss-scene-local-context-label">Deleted Upstream:</span>
+        this upstream performer no longer exists. Review this local performer and either resolve or dismiss.
+      `;
+      wrapper.appendChild(deletedNotice);
+    }
 
     // Quick select buttons
     const quickActions = document.createElement('div');
@@ -2271,7 +2307,7 @@
     const applyBtn = document.createElement('button');
     applyBtn.className = 'ss-btn ss-upstream-apply-btn';
     applyBtn.id = 'ss-upstream-apply';
-    applyBtn.textContent = 'Apply Selected Changes';
+    applyBtn.textContent = upstreamStatus === 'deleted' ? 'Mark Reviewed' : 'Apply Selected Changes';
 
     const dismissDropdown = document.createElement('div');
     dismissDropdown.style.cssText = 'position:relative;';
@@ -2335,6 +2371,7 @@
     keepAllBtn.addEventListener('click', () => {
       wrapper.querySelectorAll('.ss-upstream-field-row').forEach(row => {
         const mt = row.dataset.mergeType;
+        if (mt === 'readonly') return;
         if (mt === 'alias_list') {
           // Check all local/both items, uncheck upstream-only
           row.querySelectorAll('.ss-upstream-alias-item').forEach(item => {
@@ -2359,6 +2396,7 @@
     acceptAllBtn.addEventListener('click', () => {
       wrapper.querySelectorAll('.ss-upstream-field-row').forEach(row => {
         const mt = row.dataset.mergeType;
+        if (mt === 'readonly') return;
         if (mt === 'alias_list') {
           // Check all items (merge all)
           row.querySelectorAll('.ss-upstream-alias-item input[type="checkbox"]').forEach(cb => { cb.checked = true; });
@@ -2391,6 +2429,10 @@
         const mergeType = row.dataset.mergeType;
         const fieldIndex = parseInt(row.dataset.fieldIndex);
         const change = changes[fieldIndex];
+
+        if (mergeType === 'readonly') {
+          return;
+        }
 
         if (mergeType === 'alias_list') {
           const checkedAliases = [];
@@ -2440,17 +2482,41 @@
         }
       });
 
+      if (needsRelink) {
+        fields.stash_ids = relink.stash_ids_after_relink;
+      }
+
       // Check if any changes were selected
       const hasChanges = Object.keys(fields).length > 0;
       if (!hasChanges) {
         try {
           applyBtn.disabled = true;
-          applyBtn.textContent = 'Resolving...';
+          applyBtn.textContent = upstreamStatus === 'deleted' ? 'Reviewing...' : 'Resolving...';
           await RecommendationsAPI.resolve(rec.id, 'accepted_no_changes', {});
-          showSuccessAndReturn(applyBtn, 'Done!');
+          showSuccessAndReturn(applyBtn, upstreamStatus === 'deleted' ? 'Reviewed' : 'Done!');
         } catch (e) {
           applyBtn.textContent = `Failed: ${e.message}`;
           applyBtn.classList.add('ss-btn-error');
+          applyBtn.disabled = false;
+        }
+        return;
+      }
+
+      const hasEditableChanges = Object.keys(fields).some(k => k !== 'stash_ids');
+
+      // Relink-only flow (merged upstream performer, no field edits selected)
+      if (!hasEditableChanges && needsRelink) {
+        try {
+          applyBtn.disabled = true;
+          applyBtn.textContent = 'Relinking...';
+          await RecommendationsAPI.updatePerformer(performerId, fields);
+          await RecommendationsAPI.resolve(rec.id, 'relinked', { stash_ids: fields.stash_ids });
+          showSuccessAndReturn(applyBtn, 'Relinked!');
+        } catch (e) {
+          errorDiv.innerHTML = `<div>${escapeHtml(e.message)}</div>`;
+          errorDiv.style.display = 'block';
+          applyBtn.textContent = 'Apply Selected Changes';
+          applyBtn.classList.remove('ss-btn-error');
           applyBtn.disabled = false;
         }
         return;
@@ -4030,6 +4096,12 @@
       aliasLabel.appendChild(document.createTextNode(' Add old name as alias when switching'));
       aliasOption.appendChild(aliasLabel);
       fieldRow.appendChild(aliasOption);
+    }
+
+    if (mergeType === 'readonly') {
+      localCb.disabled = true;
+      upstreamCb.disabled = true;
+      resultInput.readOnly = true;
     }
   }
 

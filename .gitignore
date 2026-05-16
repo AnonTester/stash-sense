@@ -63,3 +63,6 @@ site/
 # OS
 .DS_Store
 Thumbs.db
+
+# AI instructions
+AGENTS.md
