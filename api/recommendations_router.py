@@ -1366,6 +1366,72 @@ async def _create_tag_from_stashbox(stash, stashbox_data: dict, endpoint: str, s
         raise
 
 
+def _studio_matches_name_or_alias(studio: dict, expected_name: str) -> bool:
+    """Match studio by exact normalized name or alias."""
+    name_norm = (expected_name or "").strip().lower()
+    if not name_norm:
+        return False
+    if (studio.get("name") or "").strip().lower() == name_norm:
+        return True
+    aliases = {str(a).strip().lower() for a in (studio.get("aliases") or []) if str(a).strip()}
+    return name_norm in aliases
+
+
+async def _link_existing_studio_by_name_or_alias(
+    stash,
+    studio_name: str,
+    endpoint: str,
+    stashbox_id: str,
+) -> Optional[dict]:
+    """Find and link an existing local studio matching the StashBox studio by name/alias."""
+    local_matches = await stash.search_studios(studio_name, limit=25)
+    for match in local_matches:
+        if not _studio_matches_name_or_alias(match, studio_name):
+            continue
+        current_stash_ids = list(match.get("stash_ids") or [])
+        if not _stash_id_link_exists(current_stash_ids, endpoint, stashbox_id):
+            current_stash_ids.append({"endpoint": endpoint, "stash_id": stashbox_id})
+            await stash.update_studio(match["id"], stash_ids=current_stash_ids)
+            logger.warning(
+                "Linked existing studio '%s' (ID: %s) to StashBox %s on %s",
+                match.get("name"),
+                match.get("id"),
+                stashbox_id,
+                endpoint,
+            )
+        return {"id": match["id"], "name": match.get("name")}
+    return None
+
+
+async def _create_studio_from_stashbox(stash, stashbox_data: dict, endpoint: str, stashbox_id: str) -> dict:
+    """Create (or link) a local studio from StashBox data with stash_id link."""
+    studio_name = (stashbox_data.get("name") or "").strip()
+    if not studio_name:
+        raise HTTPException(status_code=422, detail="Studio name is required")
+
+    existing = await _link_existing_studio_by_name_or_alias(stash, studio_name, endpoint, stashbox_id)
+    if existing:
+        return existing
+
+    urls = [
+        u.get("url") if isinstance(u, dict) else u
+        for u in (stashbox_data.get("urls") or [])
+    ]
+    try:
+        return await stash.create_studio(
+            name=studio_name,
+            stash_ids=[{"endpoint": endpoint, "stash_id": stashbox_id}],
+            urls=urls if urls else None,
+        )
+    except RuntimeError as exc:
+        if "already exists" not in str(exc).lower():
+            raise
+        existing = await _link_existing_studio_by_name_or_alias(stash, studio_name, endpoint, stashbox_id)
+        if existing:
+            return existing
+        raise
+
+
 async def _apply_scene_update(
     stash, scene_id: str, fields: dict,
     performer_ids: list[str] | None = None,
@@ -1407,14 +1473,8 @@ async def create_tag_action(request: CreateTagRequest):
 async def create_studio_action(request: CreateStudioRequest):
     """Create a new local studio from StashBox data."""
     stash = get_stash_client()
-    urls = [
-        u.get("url") if isinstance(u, dict) else u
-        for u in (request.stashbox_data.get("urls") or [])
-    ]
-    result = await stash.create_studio(
-        name=request.stashbox_data.get("name", ""),
-        stash_ids=[{"endpoint": request.endpoint, "stash_id": request.stashbox_id}],
-        urls=urls if urls else None,
+    result = await _create_studio_from_stashbox(
+        stash, request.stashbox_data, request.endpoint, request.stashbox_id
     )
     return {"success": True, "studio": result}
 

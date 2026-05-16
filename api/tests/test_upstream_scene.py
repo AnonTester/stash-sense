@@ -670,6 +670,153 @@ class TestUpstreamSceneAnalyzer:
         recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
         assert len(recs) == 0
 
+    @pytest.mark.asyncio
+    async def test_ignores_tag_add_when_local_scene_already_has_matching_local_tag(self, rec_db):
+        """Do not suggest scene-tag additions when matching local tag is already on scene."""
+        stash = MagicMock()
+        stash.get_stashbox_connections = AsyncMock(return_value=[
+            {"endpoint": "https://stashdb.org/graphql", "api_key": "key"},
+        ])
+        stash.get_scenes_for_endpoint = AsyncMock(return_value=[
+            {
+                "id": "1",
+                "title": "Local Title",
+                "date": "2025-01-01",
+                "details": "",
+                "director": "",
+                "code": "",
+                "urls": [],
+                "studio": None,
+                "performers": [],
+                "tags": [
+                    {
+                        "id": "10",
+                        "name": "Femaleorgasm",
+                        # No stash_ids link on tag itself, but tag is already assigned to scene.
+                        "stash_ids": [],
+                    }
+                ],
+                "stash_ids": [
+                    {"endpoint": "https://stashdb.org/graphql", "stash_id": "scene-sb-1"}
+                ],
+            }
+        ])
+        stash.get_all_performers = AsyncMock(return_value=[])
+        stash.get_all_tags = AsyncMock(return_value=[{"id": "10", "name": "Femaleorgasm"}])
+        stash.get_all_studios = AsyncMock(return_value=[])
+
+        upstream_data = {
+            "title": "Local Title",
+            "details": "",
+            "date": "2025-01-01",
+            "director": "",
+            "code": "",
+            "urls": [],
+            "studio": None,
+            "tags": [{"id": "tag-sb-1", "name": "Femaleorgasm"}],
+            "performers": [],
+            "deleted": False,
+            "updated": "2025-01-15T00:00:00Z",
+        }
+
+        with patch("stashbox_client.StashBoxClient") as MockSBC:
+            mock_sbc = MagicMock()
+            mock_sbc.get_scene = AsyncMock(return_value=upstream_data)
+            MockSBC.return_value = mock_sbc
+
+            from analyzers.upstream_scene import UpstreamSceneAnalyzer
+            analyzer = UpstreamSceneAnalyzer(stash, rec_db)
+            await analyzer.run()
+
+        recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
+        assert len(recs) == 0
+
+    @pytest.mark.asyncio
+    async def test_pending_scene_rec_rechecked_when_upstream_not_updated(self, rec_db):
+        """Pending rec is re-compared in incremental mode and auto-resolved after local fix."""
+        stash = MagicMock()
+        stash.get_stashbox_connections = AsyncMock(return_value=[
+            {"endpoint": "https://stashdb.org/graphql", "api_key": "key"},
+        ])
+        stash.get_scenes_for_endpoint = AsyncMock(side_effect=[
+            # Run 1: local scene missing tag -> recommendation created
+            [
+                {
+                    "id": "1",
+                    "title": "Local Title",
+                    "date": "2025-01-01",
+                    "details": "",
+                    "director": "",
+                    "code": "",
+                    "urls": [],
+                    "studio": None,
+                    "performers": [],
+                    "tags": [],
+                    "stash_ids": [
+                        {"endpoint": "https://stashdb.org/graphql", "stash_id": "scene-sb-1"}
+                    ],
+                }
+            ],
+            # Run 2: local scene updated to include same upstream tag
+            [
+                {
+                    "id": "1",
+                    "title": "Local Title",
+                    "date": "2025-01-01",
+                    "details": "",
+                    "director": "",
+                    "code": "",
+                    "urls": [],
+                    "studio": None,
+                    "performers": [],
+                    "tags": [
+                        {
+                            "id": "10",
+                            "name": "Linked Tag",
+                            "stash_ids": [{"endpoint": "https://stashdb.org/graphql", "stash_id": "tag-sb-1"}],
+                        }
+                    ],
+                    "stash_ids": [
+                        {"endpoint": "https://stashdb.org/graphql", "stash_id": "scene-sb-1"}
+                    ],
+                }
+            ],
+        ])
+        stash.get_all_performers = AsyncMock(return_value=[])
+        stash.get_all_tags = AsyncMock(return_value=[])
+        stash.get_all_studios = AsyncMock(return_value=[])
+
+        upstream_data = {
+            "title": "Local Title",
+            "details": "",
+            "date": "2025-01-01",
+            "director": "",
+            "code": "",
+            "urls": [],
+            "studio": None,
+            "tags": [{"id": "tag-sb-1", "name": "Linked Tag"}],
+            "performers": [],
+            "deleted": False,
+            # unchanged timestamp between runs -> would normally be skipped by watermark
+            "updated": "2025-01-15T00:00:00Z",
+        }
+
+        with patch("stashbox_client.StashBoxClient") as MockSBC:
+            mock_sbc = MagicMock()
+            mock_sbc.get_scene = AsyncMock(return_value=upstream_data)
+            MockSBC.return_value = mock_sbc
+
+            from analyzers.upstream_scene import UpstreamSceneAnalyzer
+            analyzer = UpstreamSceneAnalyzer(stash, rec_db)
+            await analyzer.run(incremental=True)
+            recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
+            assert len(recs) == 1
+
+            await analyzer.run(incremental=True)
+
+        recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
+        assert len(recs) == 0
+
 
 class TestEntityCreation:
     @pytest.fixture
@@ -758,6 +905,57 @@ class TestEntityCreation:
         mock_stash.update_tag.assert_called_once_with(
             "42",
             stash_ids=[{"endpoint": "https://stashdb.org/graphql", "stash_id": "tag-uuid-1"}],
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_studio_from_stashbox_links_existing_name_match(self, mock_stash):
+        """Links stash_id to existing local studio with same name instead of creating."""
+        from recommendations_router import _create_studio_from_stashbox
+        mock_stash.search_studios = AsyncMock(return_value=[
+            {"id": "55", "name": "Manyvids: Dreaminskies", "aliases": [], "stash_ids": []}
+        ])
+        mock_stash.update_studio = AsyncMock(return_value={"id": "55"})
+
+        result = await _create_studio_from_stashbox(
+            mock_stash,
+            stashbox_data={"name": "Manyvids: Dreaminskies"},
+            endpoint="https://stashdb.org/graphql",
+            stashbox_id="studio-uuid-1",
+        )
+
+        assert result["id"] == "55"
+        mock_stash.create_studio.assert_not_called()
+        mock_stash.update_studio.assert_called_once_with(
+            "55",
+            stash_ids=[{"endpoint": "https://stashdb.org/graphql", "stash_id": "studio-uuid-1"}],
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_studio_from_stashbox_duplicate_error_falls_back_to_link(self, mock_stash):
+        """If create fails with duplicate-name error, fallback links existing studio."""
+        from recommendations_router import _create_studio_from_stashbox
+        mock_stash.search_studios = AsyncMock(side_effect=[
+            [],
+            [{"id": "55", "name": "Manyvids: Dreaminskies", "aliases": [], "stash_ids": []}],
+        ])
+        mock_stash.update_studio = AsyncMock(return_value={"id": "55"})
+        mock_stash.create_studio = AsyncMock(
+            side_effect=RuntimeError(
+                "GraphQL error: [{'message': \"studio with name 'Manyvids: Dreaminskies' already exists\", 'path': ['studioCreate']}]"
+            )
+        )
+
+        result = await _create_studio_from_stashbox(
+            mock_stash,
+            stashbox_data={"name": "Manyvids: Dreaminskies"},
+            endpoint="https://stashdb.org/graphql",
+            stashbox_id="studio-uuid-1",
+        )
+
+        assert result["id"] == "55"
+        mock_stash.update_studio.assert_called_once_with(
+            "55",
+            stash_ids=[{"endpoint": "https://stashdb.org/graphql", "stash_id": "studio-uuid-1"}],
         )
 
 

@@ -329,9 +329,15 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
                 if latest_updated_at is None or (updated_at and updated_at > latest_updated_at):
                     latest_updated_at = updated_at
 
+                existing_pending = self.rec_db.get_recommendation_by_target(
+                    self.type, self.entity_type, local_id, status="pending"
+                )
+
                 # In incremental mode, skip entities not updated since last run.
+                # Exception: if there is a pending recommendation, still re-compare
+                # so stale recommendations can auto-resolve after local edits.
                 # Still add to skip_local_ids so lower-priority endpoints don't re-process.
-                if watermark and updated_at and updated_at <= watermark:
+                if watermark and updated_at and updated_at <= watermark and not existing_pending:
                     skipped += 1
                     if skip_local_ids is not None:
                         skip_local_ids.add(local_id)
@@ -388,11 +394,6 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
                     local_entity=local_entity,
                     updated_at=updated_at,
                     changes=changes,
-                )
-
-                # Check for existing pending recommendation
-                existing_pending = self.rec_db.get_recommendation_by_target(
-                    self.type, self.entity_type, local_id, status="pending"
                 )
 
                 if existing_pending:

@@ -205,7 +205,54 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
             "studio": studio,
             "performers": performers,
             "tags": tags,
+            # Local scene membership (local IDs) used to suppress "add" suggestions
+            # when the matched local entity is already on the scene.
+            "_local_performer_ids": [str(p.get("id")) for p in (entity.get("performers") or []) if p.get("id") is not None],
+            "_local_tag_ids": [str(t.get("id")) for t in (entity.get("tags") or []) if t.get("id") is not None],
         }
+
+    def _prune_added_changes_already_present(
+        self,
+        local_data: dict,
+        performer_changes: Optional[dict],
+        tag_changes: Optional[dict],
+    ) -> tuple[dict, dict]:
+        """Remove add-suggestions when the matched local entity is already on the scene."""
+        local_performer_ids = set(local_data.get("_local_performer_ids") or [])
+        local_tag_ids = set(local_data.get("_local_tag_ids") or [])
+
+        performer_changes = performer_changes or {"added": [], "removed": [], "alias_changed": []}
+        tag_changes = tag_changes or {"added": [], "removed": []}
+
+        pruned_added_performers = []
+        for perf in performer_changes.get("added", []):
+            match_id = None
+            if self._performer_name_lookup:
+                match_id = self._performer_name_lookup.get((perf.get("name") or "").strip().lower())
+            if match_id and str(match_id) in local_performer_ids:
+                continue
+            pruned_added_performers.append(perf)
+
+        pruned_added_tags = []
+        for tag in tag_changes.get("added", []):
+            match_id = None
+            if self._tag_name_lookup:
+                match_id = self._tag_name_lookup.get((tag.get("name") or "").strip().lower())
+            if match_id and str(match_id) in local_tag_ids:
+                continue
+            pruned_added_tags.append(tag)
+
+        return (
+            {
+                "added": pruned_added_performers,
+                "removed": performer_changes.get("removed", []),
+                "alias_changed": performer_changes.get("alias_changed", []),
+            },
+            {
+                "added": pruned_added_tags,
+                "removed": tag_changes.get("removed", []),
+            },
+        )
 
     def _normalize_upstream(self, raw_data: dict) -> dict:
         return normalize_upstream_scene(raw_data)
@@ -230,8 +277,11 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
         The _build_recommendation_details override handles the dict format.
         """
         result = diff_scene_fields(local_data, upstream_data, snapshot, enabled_fields)
-        result["performer_changes"] = self._filter_performer_changes_by_gender(
-            result.get("performer_changes")
+        result["performer_changes"] = self._filter_performer_changes_by_gender(result.get("performer_changes"))
+        result["performer_changes"], result["tag_changes"] = self._prune_added_changes_already_present(
+            local_data,
+            result.get("performer_changes"),
+            result.get("tag_changes"),
         )
         if not _has_scene_changes(result):
             return []
