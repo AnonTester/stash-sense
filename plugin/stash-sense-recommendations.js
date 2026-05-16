@@ -1214,14 +1214,15 @@
 
     if (rec.type === 'upstream_scene_changes') {
       const simpleChanges = filterRealChanges(details.changes || []);
-      const perfChanges = details.performer_changes || { added: [], removed: [], alias_changed: [] };
+      const rawPerfChanges = details.performer_changes || { added: [], removed: [], alias_changed: [] };
+      const perfChanges = { ...rawPerfChanges, alias_changed: [] };
       const tagChanges = details.tag_changes || { added: [], removed: [] };
       const studioChange = details.studio_change;
 
       const parts = [];
       if (simpleChanges.length > 0) parts.push(`${simpleChanges.length} field${simpleChanges.length !== 1 ? 's' : ''}`);
       if (studioChange) parts.push('studio');
-      const perfTotal = perfChanges.added.length + perfChanges.removed.length + perfChanges.alias_changed.length;
+      const perfTotal = perfChanges.added.length + perfChanges.removed.length;
       if (perfTotal > 0) parts.push(`${perfTotal} performer${perfTotal !== 1 ? 's' : ''}`);
       const tagTotal = tagChanges.added.length + tagChanges.removed.length;
       if (tagTotal > 0) parts.push(`${tagTotal} tag${tagTotal !== 1 ? 's' : ''}`);
@@ -3182,14 +3183,15 @@
     const details = rec.details;
     const simpleChanges = filterRealChanges(details.changes || []);
     const studioChange = details.studio_change;
-    const performerChanges = details.performer_changes || { added: [], removed: [], alias_changed: [] };
+    const rawPerformerChanges = details.performer_changes || { added: [], removed: [], alias_changed: [] };
+    const performerChanges = { ...rawPerformerChanges, alias_changed: [] };
     const tagChanges = details.tag_changes || { added: [], removed: [] };
     const sceneId = details.scene_id;
     const endpoint = details.endpoint;
 
     const hasSimple = simpleChanges.length > 0;
     const hasStudio = studioChange !== null && studioChange !== undefined;
-    const hasPerformers = performerChanges.added.length > 0 || performerChanges.removed.length > 0 || performerChanges.alias_changed.length > 0;
+    const hasPerformers = performerChanges.added.length > 0 || performerChanges.removed.length > 0;
     const hasTags = tagChanges.added.length > 0 || tagChanges.removed.length > 0;
 
     if (!hasSimple && !hasStudio && !hasPerformers && !hasTags) {

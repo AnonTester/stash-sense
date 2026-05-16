@@ -72,7 +72,9 @@ def _has_scene_changes(result: dict) -> bool:
     if result.get("studio_change") is not None:
         return True
     pc = result.get("performer_changes", {})
-    if pc.get("added") or pc.get("removed") or pc.get("alias_changed"):
+    # Scene-level performer aliases are not writable in local Stash, so
+    # alias-only differences are intentionally ignored here.
+    if pc.get("added") or pc.get("removed"):
         return True
     tc = result.get("tag_changes", {})
     if tc.get("added") or tc.get("removed"):
@@ -258,7 +260,8 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
             {
                 "added": pruned_added_performers,
                 "removed": performer_changes.get("removed", []),
-                "alias_changed": performer_changes.get("alias_changed", []),
+                # Scene-level performer aliases are intentionally ignored.
+                "alias_changed": [],
             },
             {
                 "added": pruned_added_tags,
@@ -322,7 +325,10 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
         return gender in selected
 
     def _filter_performer_changes_by_gender(self, performer_changes: Optional[dict]) -> dict:
-        """Filter performer added/removed/alias changes by selected genders."""
+        """Filter performer added/removed changes by selected genders.
+
+        Note: Alias differences are intentionally ignored for scene changes.
+        """
         if not performer_changes:
             return {"added": [], "removed": [], "alias_changed": []}
 
@@ -336,10 +342,7 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
                 p for p in performer_changes.get("removed", [])
                 if self._performer_gender_is_selected(p, selected)
             ],
-            "alias_changed": [
-                p for p in performer_changes.get("alias_changed", [])
-                if self._performer_gender_is_selected(p, selected)
-            ],
+            "alias_changed": [],
         }
 
     def _build_recommendation_details(

@@ -395,7 +395,7 @@ class TestUpstreamSceneAnalyzer:
 
     @pytest.mark.asyncio
     async def test_filters_unselected_performer_genders(self, mock_stash, rec_db):
-        """Performer add/remove/alias changes are filtered by selected genders."""
+        """Performer add/remove changes are filtered by selected genders."""
         mock_stash.get_scenes_for_endpoint = AsyncMock(return_value=[
             {
                 "id": "1",
@@ -469,7 +469,63 @@ class TestUpstreamSceneAnalyzer:
 
         assert [p["id"] for p in perf_changes["added"]] == ["perf-female-new"]
         assert perf_changes["removed"] == []
-        assert [p["id"] for p in perf_changes["alias_changed"]] == ["perf-female-existing"]
+        assert perf_changes["alias_changed"] == []
+
+    @pytest.mark.asyncio
+    async def test_alias_only_scene_performer_change_is_ignored(self, mock_stash, rec_db):
+        """Scene performer alias-only differences should not create recommendations."""
+        mock_stash.get_scenes_for_endpoint = AsyncMock(return_value=[
+            {
+                "id": "1",
+                "title": "Local Title",
+                "date": "2025-01-01",
+                "details": "",
+                "director": "",
+                "code": "",
+                "urls": [],
+                "studio": None,
+                "performers": [
+                    {
+                        "id": "21",
+                        "name": "Existing",
+                        "gender": "FEMALE",
+                        "stash_ids": [{"endpoint": "https://stashdb.org/graphql", "stash_id": "perf-existing"}],
+                    },
+                ],
+                "tags": [],
+                "stash_ids": [
+                    {"endpoint": "https://stashdb.org/graphql", "stash_id": "sb-scene-1"}
+                ],
+            }
+        ])
+
+        upstream_data = {
+            "title": "Local Title",
+            "details": "",
+            "date": "2025-01-01",
+            "director": "",
+            "code": "",
+            "urls": [],
+            "studio": None,
+            "tags": [],
+            "performers": [
+                {"performer": {"id": "perf-existing", "name": "Existing", "gender": "FEMALE"}, "as": "Alias Upstream"}
+            ],
+            "deleted": False,
+            "updated": "2025-01-15T00:00:00Z",
+        }
+
+        with patch("stashbox_client.StashBoxClient") as MockSBC:
+            mock_sbc = MagicMock()
+            mock_sbc.get_scene = AsyncMock(return_value=upstream_data)
+            MockSBC.return_value = mock_sbc
+
+            from analyzers.upstream_scene import UpstreamSceneAnalyzer
+            analyzer = UpstreamSceneAnalyzer(mock_stash, rec_db)
+            await analyzer.run()
+
+        recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
+        assert len(recs) == 0
 
     @pytest.mark.asyncio
     async def test_ignores_rec_when_only_unselected_gender_changes(self, mock_stash, rec_db):
