@@ -1957,6 +1957,12 @@ async def _apply_scene_tag_only_recommendation(stash, db, rec) -> dict:
         if local_tag_id:
             next_tag_ids.add(local_tag_id)
 
+    def _normalize_nullish_text(value) -> str:
+        if value is None:
+            return ""
+        text = str(value).strip()
+        return "" if text.lower() == "null" else text
+
     for change in simple_changes:
         field = str(change.get("field") or "")
         if field not in _SCENE_BULK_ALLOWED_SIMPLE_FIELDS:
@@ -1964,19 +1970,19 @@ async def _apply_scene_tag_only_recommendation(stash, db, rec) -> dict:
                 f"Unsupported simple field for bulk scene accept: {field}"
             )
         if field == "code":
-            simple_fields["code"] = str(change.get("upstream_value") or "")
+            simple_fields["code"] = _normalize_nullish_text(change.get("upstream_value"))
         elif field == "urls":
             upstream_urls = change.get("upstream_value")
             if upstream_urls is None:
                 simple_fields["urls"] = []
             elif isinstance(upstream_urls, list):
                 simple_fields["urls"] = [
-                    str(url).strip()
+                    _normalize_nullish_text(url)
                     for url in upstream_urls
-                    if str(url).strip()
+                    if _normalize_nullish_text(url)
                 ]
             else:
-                url = str(upstream_urls).strip()
+                url = _normalize_nullish_text(upstream_urls)
                 simple_fields["urls"] = [url] if url else []
 
     if next_tag_ids != current_tag_ids or simple_fields:

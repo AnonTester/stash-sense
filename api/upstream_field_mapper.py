@@ -685,14 +685,30 @@ SCENE_SIMPLE_FIELDS = {"title", "date", "details", "director", "code", "urls"}
 SCENE_RELATIONAL_FIELDS = {"studio", "performers", "tags"}
 
 
+def _normalize_nullish_text(value) -> str:
+    """Normalize null-like text values coming from upstream systems.
+
+    Some upstream endpoints return the literal string "null" for empty text
+    fields. Treat that as empty to avoid false-positive diffs and accidental
+    writes of the text value "null" into local fields.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str) and value.strip().lower() == "null":
+        return ""
+    return str(value)
+
+
 def normalize_upstream_scene(upstream: dict) -> dict:
     """Normalize a StashBox scene to canonical field names."""
     urls = []
     for u in (upstream.get("urls") or []):
         if isinstance(u, dict):
-            urls.append(u.get("url", ""))
+            normalized_url = _normalize_nullish_text(u.get("url", ""))
         else:
-            urls.append(str(u))
+            normalized_url = _normalize_nullish_text(u)
+        if normalized_url.strip():
+            urls.append(normalized_url)
 
     performers = []
     for pa in (upstream.get("performers") or []):
@@ -713,11 +729,11 @@ def normalize_upstream_scene(upstream: dict) -> dict:
         studio = {"id": studio.get("id"), "name": studio.get("name")}
 
     return {
-        "title": upstream.get("title") or "",
-        "date": upstream.get("release_date") or upstream.get("date") or "",
-        "details": upstream.get("details") or "",
-        "director": upstream.get("director") or "",
-        "code": upstream.get("code") or "",
+        "title": _normalize_nullish_text(upstream.get("title")),
+        "date": _normalize_nullish_text(upstream.get("release_date") or upstream.get("date")),
+        "details": _normalize_nullish_text(upstream.get("details")),
+        "director": _normalize_nullish_text(upstream.get("director")),
+        "code": _normalize_nullish_text(upstream.get("code")),
         "urls": urls,
         "studio": studio,
         "performers": performers,

@@ -289,23 +289,36 @@
       .join(' ');
   }
 
+  function isNullishString(val) {
+    return typeof val === 'string' && val.trim().toLowerCase() === 'null';
+  }
+
+  function isEmptyLikeValue(val) {
+    return val === null || val === undefined || val === '' || val === 0 || isNullishString(val);
+  }
+
   // Filter out false-positive changes where values are effectively equal
   function filterRealChanges(changes) {
     return (changes || []).filter(change => {
       const local = change.local_value;
       const upstream = change.upstream_value;
-      // Both null/undefined/empty string/zero
-      const isEmptyVal = v => v === null || v === undefined || v === '' || v === 0;
-      if (isEmptyVal(local) && isEmptyVal(upstream)) return false;
+      // Both null/undefined/empty string/zero/"null"
+      if (isEmptyLikeValue(local) && isEmptyLikeValue(upstream)) return false;
       // String case-insensitive comparison
       if (typeof local === 'string' && typeof upstream === 'string') {
-        if (local.toLowerCase() === upstream.toLowerCase()) return false;
+        const localNorm = local.trim().toLowerCase();
+        const upstreamNorm = upstream.trim().toLowerCase();
+        if (localNorm === upstreamNorm) return false;
+        if ((localNorm === '' || localNorm === 'null') && (upstreamNorm === '' || upstreamNorm === 'null')) return false;
       }
       // List comparison (alias_list, urls) - case-insensitive set equality with trailing slash normalization
       if (Array.isArray(local) && Array.isArray(upstream)) {
-        const norm = v => String(v).toLowerCase().replace(/\/+$/, '');
-        const localSet = new Set(local.map(norm));
-        const upstreamSet = new Set(upstream.map(norm));
+        const norm = (v) => {
+          const text = String(v).trim().toLowerCase().replace(/\/+$/, '');
+          return text === 'null' ? '' : text;
+        };
+        const localSet = new Set(local.map(norm).filter(Boolean));
+        const upstreamSet = new Set(upstream.map(norm).filter(Boolean));
         if (localSet.size === upstreamSet.size && [...localSet].every(v => upstreamSet.has(v))) return false;
       }
       // Strict equality for other types
@@ -613,7 +626,7 @@
 
   function computeBatchChanges(recommendations) {
     function smartDefault(localVal, upstreamVal) {
-      const upstreamEmpty = upstreamVal === null || upstreamVal === undefined || upstreamVal === '';
+      const upstreamEmpty = isEmptyLikeValue(upstreamVal);
       if (!upstreamEmpty) return 'upstream';
       return 'local';
     }
@@ -2336,7 +2349,7 @@
 
     // Smart default: prefer upstream (stash-box is source of truth)
     function smartDefault(localVal, upstreamVal) {
-      const upstreamEmpty = upstreamVal === null || upstreamVal === undefined || upstreamVal === '';
+      const upstreamEmpty = isEmptyLikeValue(upstreamVal);
       if (!upstreamEmpty) return 'upstream';
       return 'local';
     }
@@ -2839,7 +2852,7 @@
 
     // Smart default: prefer upstream (stash-box is source of truth)
     function smartDefault(localVal, upstreamVal) {
-      const upstreamEmpty = upstreamVal === null || upstreamVal === undefined || upstreamVal === '';
+      const upstreamEmpty = isEmptyLikeValue(upstreamVal);
       if (!upstreamEmpty) return 'upstream';
       return 'local';
     }
@@ -3134,7 +3147,7 @@
 
     // Smart default: prefer upstream (stash-box is source of truth)
     function smartDefault(localVal, upstreamVal) {
-      const upstreamEmpty = upstreamVal === null || upstreamVal === undefined || upstreamVal === '';
+      const upstreamEmpty = isEmptyLikeValue(upstreamVal);
       if (!upstreamEmpty) return 'upstream';
       return 'local';
     }
@@ -3395,7 +3408,7 @@
 
     function displayValue(val) { return formatFieldValue(val); }
     function smartDefault(localVal, upstreamVal) {
-      const upstreamEmpty = upstreamVal === null || upstreamVal === undefined || upstreamVal === '';
+      const upstreamEmpty = isEmptyLikeValue(upstreamVal);
       return !upstreamEmpty ? 'upstream' : 'local';
     }
 
@@ -4742,9 +4755,15 @@
   }
 
   function formatFieldValue(val) {
-    if (val === null || val === undefined) return '(empty)';
-    if (Array.isArray(val)) return val.join(', ') || '(empty)';
-    return String(val) || '(empty)';
+    if (val === null || val === undefined || isNullishString(val)) return '(empty)';
+    if (Array.isArray(val)) {
+      const normalized = val
+        .map(v => String(v).trim())
+        .filter(v => v && v.toLowerCase() !== 'null');
+      return normalized.join(', ') || '(empty)';
+    }
+    const text = String(val);
+    return text || '(empty)';
   }
 
   function buildAliasList(localAliases, upstreamAliases) {
