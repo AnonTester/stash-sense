@@ -1781,6 +1781,10 @@ class AcceptAllFingerprintMatchesRequest(BaseModel):
     endpoint: Optional[str] = None
 
 
+class AcceptSceneTagOnlyChangeRequest(BaseModel):
+    rec_id: int
+
+
 async def _accept_all_fingerprint_matches(
     stash, db, endpoint: Optional[str] = None,
 ) -> int:
@@ -1815,6 +1819,198 @@ async def _accept_all_fingerprint_matches(
     return accepted
 
 
+def _is_tag_only_scene_change(details: dict) -> bool:
+    """Return True when a scene recommendation only contains tag add/remove changes."""
+    if not isinstance(details, dict):
+        return False
+
+    if details.get("changes"):
+        return False
+    if details.get("studio_change"):
+        return False
+
+    performer_changes = details.get("performer_changes") or {}
+    if performer_changes.get("added") or performer_changes.get("removed"):
+        return False
+
+    tag_changes = details.get("tag_changes") or {}
+    return bool(tag_changes.get("added") or tag_changes.get("removed"))
+
+
+async def _get_scene_tags_with_stash_ids(stash, scene_id: str) -> list[dict]:
+    """Fetch the latest scene tag assignments including stash_id links."""
+    data = await stash._execute(
+        """
+        query SceneTags($id: ID!) {
+          findScene(id: $id) {
+            id
+            tags {
+              id
+              name
+              stash_ids {
+                endpoint
+                stash_id
+              }
+            }
+          }
+        }
+        """,
+        {"id": scene_id},
+    )
+    scene = data.get("findScene")
+    if not scene:
+        raise RuntimeError(f"Scene not found: {scene_id}")
+    return scene.get("tags") or []
+
+
+def _resolve_scene_tag_local_id(
+    scene_tags: list[dict],
+    endpoint: str,
+    stashbox_id: str,
+) -> Optional[str]:
+    """Resolve local scene tag ID by upstream endpoint + stashbox tag ID."""
+    endpoint_norm = _normalize_endpoint_for_compare(endpoint)
+    stashbox_id_str = str(stashbox_id)
+    for tag in scene_tags:
+        local_tag_id = tag.get("id")
+        if local_tag_id is None:
+            continue
+        for sid in (tag.get("stash_ids") or []):
+            sid_endpoint_norm = _normalize_endpoint_for_compare(sid.get("endpoint"))
+            sid_stash_id = str(sid.get("stash_id", ""))
+            if sid_endpoint_norm == endpoint_norm and sid_stash_id == stashbox_id_str:
+                return str(local_tag_id)
+    return None
+
+
+async def _apply_scene_tag_only_recommendation(stash, db, rec) -> dict:
+    """Apply one pending upstream scene recommendation when only tags changed."""
+    current = db.get_recommendation(rec.id)
+    if not current or current.status != "pending":
+        raise RuntimeError(f"Recommendation {rec.id} is no longer pending")
+
+    details = current.details or {}
+    if current.type != "upstream_scene_changes" or not _is_tag_only_scene_change(details):
+        raise RuntimeError(f"Recommendation {rec.id} is not a tag-only upstream scene change")
+
+    scene_id = str(details.get("scene_id") or "").strip()
+    endpoint = str(details.get("endpoint") or "").strip()
+    tag_changes = details.get("tag_changes") or {}
+    if not scene_id or not endpoint:
+        raise RuntimeError(f"Recommendation {rec.id} missing scene_id/endpoint")
+
+    ensured_tags = 0
+    scene_tags = await _get_scene_tags_with_stash_ids(stash, scene_id)
+    current_tag_ids = {
+        str(tag.get("id"))
+        for tag in scene_tags
+        if tag.get("id") is not None
+    }
+    next_tag_ids = set(current_tag_ids)
+
+    for removed in (tag_changes.get("removed") or []):
+        removed_stashbox_id = str(removed.get("id") or "").strip()
+        if not removed_stashbox_id:
+            continue
+        local_tag_id = _resolve_scene_tag_local_id(
+            scene_tags=scene_tags,
+            endpoint=endpoint,
+            stashbox_id=removed_stashbox_id,
+        )
+        if local_tag_id:
+            next_tag_ids.discard(local_tag_id)
+
+    for added in (tag_changes.get("added") or []):
+        local_tag_id = str(((added.get("local_match") or {}).get("id") or "")).strip()
+        if not local_tag_id:
+            stashbox_id = str(added.get("id") or "").strip()
+            if not stashbox_id:
+                raise RuntimeError(
+                    f"Missing upstream tag id in recommendation {current.id}"
+                )
+            tag_payload = {
+                "name": added.get("name", ""),
+                "aliases": added.get("aliases") or [],
+            }
+            created_or_linked = await _create_tag_from_stashbox(
+                stash=stash,
+                stashbox_data=tag_payload,
+                endpoint=endpoint,
+                stashbox_id=stashbox_id,
+            )
+            local_tag_id = str(created_or_linked.get("id"))
+            ensured_tags += 1
+
+        if local_tag_id:
+            next_tag_ids.add(local_tag_id)
+
+    if next_tag_ids != current_tag_ids:
+        await _apply_scene_update(
+            stash=stash,
+            scene_id=scene_id,
+            fields={},
+            tag_ids=sorted(next_tag_ids),
+        )
+        action = "applied"
+    else:
+        action = "accepted_no_changes"
+
+    db.resolve_recommendation(
+        current.id,
+        action=action,
+        details={"bulk": "tag_only_scene_changes"},
+    )
+    return {
+        "rec_id": current.id,
+        "scene_id": scene_id,
+        "action": action,
+        "ensured_tags_count": ensured_tags,
+    }
+
+
+async def _accept_all_scene_tag_only_changes(stash, db) -> dict:
+    """Accept all pending upstream scene recommendations that contain only tag changes."""
+    recs = db.get_recommendations(
+        status="pending", type="upstream_scene_changes", limit=10000,
+    )
+
+    accepted = 0
+    failed = 0
+    skipped = 0
+    ensured_tags = 0
+
+    for rec in recs:
+        current = db.get_recommendation(rec.id)
+        if not current or current.status != "pending":
+            continue
+
+        details = current.details or {}
+        if not _is_tag_only_scene_change(details):
+            skipped += 1
+            continue
+
+        try:
+            apply_result = await _apply_scene_tag_only_recommendation(stash, db, rec)
+            ensured_tags += int(apply_result.get("ensured_tags_count") or 0)
+            accepted += 1
+        except Exception as e:
+            failed += 1
+            scene_id = str((details or {}).get("scene_id") or "")
+            logger.warning(
+                "Failed bulk tag-only apply for rec %s (scene %s): %s",
+                current.id,
+                scene_id,
+                e,
+            )
+
+    return {
+        "accepted_count": accepted,
+        "failed_count": failed,
+        "skipped_count": skipped,
+        "ensured_tags_count": ensured_tags,
+    }
+
+
 @router.post("/actions/accept-all-fingerprint-matches")
 async def accept_all_fingerprint_matches(
     request: AcceptAllFingerprintMatchesRequest = AcceptAllFingerprintMatchesRequest(),
@@ -1824,6 +2020,30 @@ async def accept_all_fingerprint_matches(
     db = get_rec_db()
     accepted = await _accept_all_fingerprint_matches(stash, db, request.endpoint)
     return {"success": True, "accepted_count": accepted}
+
+
+@router.post("/actions/accept-all-scene-tag-only-changes")
+async def accept_all_scene_tag_only_changes():
+    """Accept all pending upstream scene recommendations that only change tags."""
+    stash = get_stash_client()
+    db = get_rec_db()
+    result = await _accept_all_scene_tag_only_changes(stash, db)
+    return {"success": True, **result}
+
+
+@router.post("/actions/accept-scene-tag-only-change")
+async def accept_scene_tag_only_change(request: AcceptSceneTagOnlyChangeRequest):
+    """Accept one pending upstream scene recommendation when only tags changed."""
+    stash = get_stash_client()
+    db = get_rec_db()
+    rec = db.get_recommendation(request.rec_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+    try:
+        result = await _apply_scene_tag_only_recommendation(stash, db, rec)
+        return {"success": True, **result}
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 class BatchDismissRequest(BaseModel):

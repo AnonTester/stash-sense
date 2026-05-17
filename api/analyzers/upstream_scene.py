@@ -89,6 +89,13 @@ def _has_scene_changes(result: dict) -> bool:
     return False
 
 
+def _normalize_name(value: Optional[str]) -> str:
+    """Normalize names for stable case-insensitive comparisons."""
+    if not value:
+        return ""
+    return str(value).strip().lower()
+
+
 class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
     """Detect upstream changes to scenes linked to stash-box endpoints."""
 
@@ -221,6 +228,8 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
             "studio": studio,
             "performers": performers,
             "tags": tags,
+            "_local_studio_id": str(local_studio.get("id")) if local_studio and local_studio.get("id") is not None else None,
+            "_local_studio_name": local_studio.get("name") if local_studio else None,
             # Local scene membership (local IDs) used to suppress "add" suggestions
             # when the matched local entity is already on the scene.
             "_local_performer_ids": [str(p.get("id")) for p in (entity.get("performers") or []) if p.get("id") is not None],
@@ -297,6 +306,41 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
             },
         )
 
+    def _prune_studio_change_already_present(self, local_data: dict, studio_change: Optional[dict]):
+        """Remove studio-change suggestion when the same local studio is already assigned."""
+        if not studio_change:
+            return studio_change
+
+        upstream_studio = studio_change.get("upstream")
+        if not upstream_studio:
+            return studio_change
+
+        local_scene_studio_id = str(local_data.get("_local_studio_id")) if local_data.get("_local_studio_id") is not None else None
+        local_scene_studio_name = _normalize_name(local_data.get("_local_studio_name"))
+        if not local_scene_studio_id and not local_scene_studio_name:
+            return studio_change
+
+        upstream_name = _normalize_name(upstream_studio.get("name"))
+
+        # Most reliable fallback for this edge case: if the scene already has a
+        # studio with the same name, don't suggest setting it again.
+        if local_scene_studio_name and upstream_name and local_scene_studio_name == upstream_name:
+            return None
+
+        # If the upstream studio resolves to the same local studio ID already on
+        # the scene, no studio update is required.
+        if self._studio_name_lookup and local_scene_studio_id and upstream_name:
+            matched_local_id = self._studio_name_lookup.get(upstream_name)
+            if not matched_local_id:
+                for alias in (upstream_studio.get("aliases") or []):
+                    matched_local_id = self._studio_name_lookup.get(_normalize_name(alias))
+                    if matched_local_id:
+                        break
+            if matched_local_id and str(matched_local_id) == local_scene_studio_id:
+                return None
+
+        return studio_change
+
     def _normalize_upstream(self, raw_data: dict) -> dict:
         return normalize_upstream_scene(raw_data)
 
@@ -325,6 +369,10 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
             local_data,
             result.get("performer_changes"),
             result.get("tag_changes"),
+        )
+        result["studio_change"] = self._prune_studio_change_already_present(
+            local_data,
+            result.get("studio_change"),
         )
         if not _has_scene_changes(result):
             return []

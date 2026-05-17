@@ -757,6 +757,22 @@ def handle_recommendations(mode, args, sidecar_url):
             payload,
         )
 
+    elif mode == "rec_accept_all_scene_tag_only_changes":
+        return sidecar_post(
+            sidecar_url,
+            "/recommendations/actions/accept-all-scene-tag-only-changes",
+            {},
+            timeout=300,
+        )
+
+    elif mode == "rec_accept_scene_tag_only_change":
+        return sidecar_post(
+            sidecar_url,
+            "/recommendations/actions/accept-scene-tag-only-change",
+            {"rec_id": args.get("rec_id")},
+            timeout=300,
+        )
+
     elif mode == "user_get_all_settings":
         return sidecar_get(sidecar_url, "/recommendations/settings")
 

@@ -264,6 +264,14 @@
         endpoint: endpoint || null,
       });
     },
+
+    async acceptAllSceneTagOnlyChanges() {
+      return apiCall('rec_accept_all_scene_tag_only_changes', {});
+    },
+
+    async acceptSceneTagOnlyChange(recId) {
+      return apiCall('rec_accept_scene_tag_only_change', { rec_id: recId });
+    },
   };
 
   /**
@@ -304,6 +312,19 @@
       if (local === upstream) return false;
       return true;
     });
+  }
+
+  function isTagOnlySceneChangeDetails(details) {
+    if (!details || typeof details !== 'object') return false;
+    if ((details.changes || []).length > 0) return false;
+    if (details.studio_change) return false;
+
+    const performerChanges = details.performer_changes || {};
+    if ((performerChanges.added || []).length > 0) return false;
+    if ((performerChanges.removed || []).length > 0) return false;
+
+    const tagChanges = details.tag_changes || {};
+    return (tagChanges.added || []).length > 0 || (tagChanges.removed || []).length > 0;
   }
 
   // Session cache for entities created during this session
@@ -817,6 +838,10 @@
             ? '<button class="ss-accept-all-btn" id="ss-accept-all-fp-btn">Accept All High-Confidence</button>'
             : ''
           }
+          ${currentState.type === 'upstream_scene_changes'
+            ? '<button class="ss-accept-all-btn" id="ss-accept-all-tag-only-btn">Accept All Tag Only Changes</button>'
+            : ''
+          }
           <button class="ss-dismiss-all-btn" id="ss-dismiss-all-btn">Dismiss All</button>
         </div>
         ` : ''}
@@ -916,6 +941,98 @@
           acceptAllFpBtn.textContent = `Failed: ${e.message}`;
           acceptAllFpBtn.classList.add('ss-btn-error');
           acceptAllFpBtn.disabled = false;
+        }
+      });
+    }
+
+    // Accept All Tag-Only Scene Changes button
+    const acceptAllTagOnlyBtn = container.querySelector('#ss-accept-all-tag-only-btn');
+    if (acceptAllTagOnlyBtn) {
+      acceptAllTagOnlyBtn.addEventListener('click', async () => {
+        acceptAllTagOnlyBtn.disabled = true;
+        acceptAllTagOnlyBtn.textContent = 'Loading...';
+        try {
+          const allPending = await RecommendationsAPI.getList({
+            type: 'upstream_scene_changes',
+            status: 'pending',
+            limit: 10000,
+            offset: 0,
+          });
+
+          const tagOnlyRecs = (allPending.recommendations || []).filter(rec => isTagOnlySceneChangeDetails(rec.details));
+          const total = tagOnlyRecs.length;
+          if (total === 0) {
+            acceptAllTagOnlyBtn.textContent = 'No tag-only changes';
+            setTimeout(() => {
+              acceptAllTagOnlyBtn.textContent = 'Accept All Tag Only Changes';
+              acceptAllTagOnlyBtn.disabled = false;
+            }, 1600);
+            return;
+          }
+
+          const STALL_TIMEOUT_MIN_MS = 120000;
+          let accepted = 0;
+          let failed = 0;
+          let ensuredTags = 0;
+          let processed = 0;
+          let avgMsPerItem = 0;
+          let stallTimeoutMs = STALL_TIMEOUT_MIN_MS;
+          let currentItemStart = 0;
+          let progressTicker = null;
+
+          const setProgressText = () => {
+            const elapsedSec = Math.max(0, Math.floor((Date.now() - currentItemStart) / 1000));
+            acceptAllTagOnlyBtn.textContent = `Accepting ${processed}/${total} (${elapsedSec}s)...`;
+          };
+
+          for (const rec of tagOnlyRecs) {
+            currentItemStart = Date.now();
+            setProgressText();
+            progressTicker = setInterval(setProgressText, 1000);
+
+            try {
+              const response = await Promise.race([
+                RecommendationsAPI.acceptSceneTagOnlyChange(rec.id),
+                new Promise((_, reject) => setTimeout(() => reject(new Error(`Stalled for ${Math.ceil(stallTimeoutMs / 1000)}s`)), stallTimeoutMs)),
+              ]);
+              accepted += 1;
+              ensuredTags += (response?.ensured_tags_count || 0);
+            } catch (e) {
+              failed += 1;
+              // Stop on a stall timeout; the action likely got stuck.
+              if (String(e.message || '').toLowerCase().includes('stalled for')) {
+                throw e;
+              }
+            } finally {
+              if (progressTicker) {
+                clearInterval(progressTicker);
+                progressTicker = null;
+              }
+              processed += 1;
+              const duration = Date.now() - currentItemStart;
+              avgMsPerItem = avgMsPerItem === 0 ? duration : Math.round((avgMsPerItem * (processed - 1) + duration) / processed);
+              // Dynamic stall timeout grows with observed item duration.
+              stallTimeoutMs = Math.max(STALL_TIMEOUT_MIN_MS, avgMsPerItem * 8);
+              setProgressText();
+            }
+          }
+
+          if (failed > 0) {
+            acceptAllTagOnlyBtn.textContent = `${accepted}/${total} accepted, ${failed} failed`;
+            acceptAllTagOnlyBtn.classList.add('ss-btn-error');
+          } else {
+            const ensuredSuffix = ensuredTags > 0 ? `, ${ensuredTags} tags created/linked` : '';
+            acceptAllTagOnlyBtn.textContent = `Accepted ${accepted}/${total}${ensuredSuffix}`;
+            acceptAllTagOnlyBtn.classList.add('ss-btn-success');
+          }
+
+          setTimeout(() => {
+            renderCurrentView(document.getElementById('ss-recommendations'));
+          }, 1500);
+        } catch (e) {
+          acceptAllTagOnlyBtn.textContent = `Failed: ${e.message}`;
+          acceptAllTagOnlyBtn.classList.add('ss-btn-error');
+          acceptAllTagOnlyBtn.disabled = false;
         }
       });
     }
