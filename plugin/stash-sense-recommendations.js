@@ -4206,8 +4206,10 @@
       upstreamCb.checked = false;
     });
 
-    // Name merge type: add "Add old name as alias" checkbox
-    if (mergeType === 'name') {
+    // Name merge type: add alias checkbox only for real entity name fields.
+    // Scene titles are marked with merge_type=name for comparison behavior,
+    // but scenes do not support aliases.
+    if (mergeType === 'name' && change.field === 'name') {
       const aliasOption = document.createElement('div');
       aliasOption.className = 'ss-upstream-name-alias-option';
       const aliasLabel = document.createElement('label');
