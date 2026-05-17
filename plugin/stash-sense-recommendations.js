@@ -314,9 +314,13 @@
     });
   }
 
-  function isTagOnlySceneChangeDetails(details) {
+  function isTagUrlCodeOnlySceneChangeDetails(details) {
     if (!details || typeof details !== 'object') return false;
-    if ((details.changes || []).length > 0) return false;
+
+    const simpleChanges = filterRealChanges(details.changes || []);
+    const allowedFields = new Set(['code', 'urls']);
+    if (simpleChanges.some(change => !allowedFields.has(change.field))) return false;
+
     if (details.studio_change) return false;
 
     const performerChanges = details.performer_changes || {};
@@ -324,7 +328,9 @@
     if ((performerChanges.removed || []).length > 0) return false;
 
     const tagChanges = details.tag_changes || {};
-    return (tagChanges.added || []).length > 0 || (tagChanges.removed || []).length > 0;
+    const hasTagChanges = (tagChanges.added || []).length > 0 || (tagChanges.removed || []).length > 0;
+    const hasSimpleChanges = simpleChanges.length > 0;
+    return hasTagChanges || hasSimpleChanges;
   }
 
   // Session cache for entities created during this session
@@ -839,7 +845,7 @@
             : ''
           }
           ${currentState.type === 'upstream_scene_changes'
-            ? '<button class="ss-accept-all-btn" id="ss-accept-all-tag-only-btn">Accept All Tag Only Changes</button>'
+            ? '<button class="ss-accept-all-btn" id="ss-accept-all-tag-url-code-btn">Accept All Tag/URL/Code Only Changes</button>'
             : ''
           }
           <button class="ss-dismiss-all-btn" id="ss-dismiss-all-btn">Dismiss All</button>
@@ -946,7 +952,7 @@
     }
 
     // Accept All Tag-Only Scene Changes button
-    const acceptAllTagOnlyBtn = container.querySelector('#ss-accept-all-tag-only-btn');
+    const acceptAllTagOnlyBtn = container.querySelector('#ss-accept-all-tag-url-code-btn');
     if (acceptAllTagOnlyBtn) {
       acceptAllTagOnlyBtn.addEventListener('click', async () => {
         acceptAllTagOnlyBtn.disabled = true;
@@ -959,12 +965,12 @@
             offset: 0,
           });
 
-          const tagOnlyRecs = (allPending.recommendations || []).filter(rec => isTagOnlySceneChangeDetails(rec.details));
-          const total = tagOnlyRecs.length;
+          const tagUrlCodeOnlyRecs = (allPending.recommendations || []).filter(rec => isTagUrlCodeOnlySceneChangeDetails(rec.details));
+          const total = tagUrlCodeOnlyRecs.length;
           if (total === 0) {
-            acceptAllTagOnlyBtn.textContent = 'No tag-only changes';
+            acceptAllTagOnlyBtn.textContent = 'No tag/URL/code-only changes';
             setTimeout(() => {
-              acceptAllTagOnlyBtn.textContent = 'Accept All Tag Only Changes';
+              acceptAllTagOnlyBtn.textContent = 'Accept All Tag/URL/Code Only Changes';
               acceptAllTagOnlyBtn.disabled = false;
             }, 1600);
             return;
@@ -985,7 +991,7 @@
             acceptAllTagOnlyBtn.textContent = `Accepting ${processed}/${total} (${elapsedSec}s)...`;
           };
 
-          for (const rec of tagOnlyRecs) {
+          for (const rec of tagUrlCodeOnlyRecs) {
             currentItemStart = Date.now();
             setProgressText();
             progressTicker = setInterval(setProgressText, 1000);

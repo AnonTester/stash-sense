@@ -1819,13 +1819,20 @@ async def _accept_all_fingerprint_matches(
     return accepted
 
 
-def _is_tag_only_scene_change(details: dict) -> bool:
-    """Return True when a scene recommendation only contains tag add/remove changes."""
+_SCENE_BULK_ALLOWED_SIMPLE_FIELDS = {"code", "urls"}
+
+
+def _is_tag_url_code_only_scene_change(details: dict) -> bool:
+    """Return True when changes are limited to tags/URLs/code only."""
     if not isinstance(details, dict):
         return False
 
-    if details.get("changes"):
-        return False
+    simple_changes = details.get("changes") or []
+    for change in simple_changes:
+        field = str(change.get("field") or "")
+        if field not in _SCENE_BULK_ALLOWED_SIMPLE_FIELDS:
+            return False
+
     if details.get("studio_change"):
         return False
 
@@ -1834,7 +1841,9 @@ def _is_tag_only_scene_change(details: dict) -> bool:
         return False
 
     tag_changes = details.get("tag_changes") or {}
-    return bool(tag_changes.get("added") or tag_changes.get("removed"))
+    has_tag_changes = bool(tag_changes.get("added") or tag_changes.get("removed"))
+    has_simple_changes = bool(simple_changes)
+    return has_tag_changes or has_simple_changes
 
 
 async def _get_scene_tags_with_stash_ids(stash, scene_id: str) -> list[dict]:
@@ -1884,22 +1893,26 @@ def _resolve_scene_tag_local_id(
 
 
 async def _apply_scene_tag_only_recommendation(stash, db, rec) -> dict:
-    """Apply one pending upstream scene recommendation when only tags changed."""
+    """Apply one pending upstream scene recommendation (tags/URLs/code only)."""
     current = db.get_recommendation(rec.id)
     if not current or current.status != "pending":
         raise RuntimeError(f"Recommendation {rec.id} is no longer pending")
 
     details = current.details or {}
-    if current.type != "upstream_scene_changes" or not _is_tag_only_scene_change(details):
-        raise RuntimeError(f"Recommendation {rec.id} is not a tag-only upstream scene change")
+    if current.type != "upstream_scene_changes" or not _is_tag_url_code_only_scene_change(details):
+        raise RuntimeError(
+            f"Recommendation {rec.id} is not a tag/url/code-only upstream scene change"
+        )
 
     scene_id = str(details.get("scene_id") or "").strip()
     endpoint = str(details.get("endpoint") or "").strip()
     tag_changes = details.get("tag_changes") or {}
+    simple_changes = details.get("changes") or []
     if not scene_id or not endpoint:
         raise RuntimeError(f"Recommendation {rec.id} missing scene_id/endpoint")
 
     ensured_tags = 0
+    simple_fields: dict = {}
     scene_tags = await _get_scene_tags_with_stash_ids(stash, scene_id)
     current_tag_ids = {
         str(tag.get("id"))
@@ -1944,11 +1957,33 @@ async def _apply_scene_tag_only_recommendation(stash, db, rec) -> dict:
         if local_tag_id:
             next_tag_ids.add(local_tag_id)
 
-    if next_tag_ids != current_tag_ids:
+    for change in simple_changes:
+        field = str(change.get("field") or "")
+        if field not in _SCENE_BULK_ALLOWED_SIMPLE_FIELDS:
+            raise RuntimeError(
+                f"Unsupported simple field for bulk scene accept: {field}"
+            )
+        if field == "code":
+            simple_fields["code"] = str(change.get("upstream_value") or "")
+        elif field == "urls":
+            upstream_urls = change.get("upstream_value")
+            if upstream_urls is None:
+                simple_fields["urls"] = []
+            elif isinstance(upstream_urls, list):
+                simple_fields["urls"] = [
+                    str(url).strip()
+                    for url in upstream_urls
+                    if str(url).strip()
+                ]
+            else:
+                url = str(upstream_urls).strip()
+                simple_fields["urls"] = [url] if url else []
+
+    if next_tag_ids != current_tag_ids or simple_fields:
         await _apply_scene_update(
             stash=stash,
             scene_id=scene_id,
-            fields={},
+            fields=simple_fields,
             tag_ids=sorted(next_tag_ids),
         )
         action = "applied"
@@ -1958,7 +1993,7 @@ async def _apply_scene_tag_only_recommendation(stash, db, rec) -> dict:
     db.resolve_recommendation(
         current.id,
         action=action,
-        details={"bulk": "tag_only_scene_changes"},
+        details={"bulk": "tag_url_code_only_scene_changes"},
     )
     return {
         "rec_id": current.id,
@@ -1969,7 +2004,7 @@ async def _apply_scene_tag_only_recommendation(stash, db, rec) -> dict:
 
 
 async def _accept_all_scene_tag_only_changes(stash, db) -> dict:
-    """Accept all pending upstream scene recommendations that contain only tag changes."""
+    """Accept pending scene recommendations with only tag/URL/code changes."""
     recs = db.get_recommendations(
         status="pending", type="upstream_scene_changes", limit=10000,
     )
@@ -1985,7 +2020,7 @@ async def _accept_all_scene_tag_only_changes(stash, db) -> dict:
             continue
 
         details = current.details or {}
-        if not _is_tag_only_scene_change(details):
+        if not _is_tag_url_code_only_scene_change(details):
             skipped += 1
             continue
 
@@ -1997,7 +2032,7 @@ async def _accept_all_scene_tag_only_changes(stash, db) -> dict:
             failed += 1
             scene_id = str((details or {}).get("scene_id") or "")
             logger.warning(
-                "Failed bulk tag-only apply for rec %s (scene %s): %s",
+                "Failed bulk tag/url/code-only apply for rec %s (scene %s): %s",
                 current.id,
                 scene_id,
                 e,
@@ -2024,7 +2059,7 @@ async def accept_all_fingerprint_matches(
 
 @router.post("/actions/accept-all-scene-tag-only-changes")
 async def accept_all_scene_tag_only_changes():
-    """Accept all pending upstream scene recommendations that only change tags."""
+    """Accept pending scene recommendations with only tag/URL/code changes."""
     stash = get_stash_client()
     db = get_rec_db()
     result = await _accept_all_scene_tag_only_changes(stash, db)
@@ -2033,7 +2068,7 @@ async def accept_all_scene_tag_only_changes():
 
 @router.post("/actions/accept-scene-tag-only-change")
 async def accept_scene_tag_only_change(request: AcceptSceneTagOnlyChangeRequest):
-    """Accept one pending upstream scene recommendation when only tags changed."""
+    """Accept one pending upstream scene recommendation (tags/URLs/code only)."""
     stash = get_stash_client()
     db = get_rec_db()
     rec = db.get_recommendation(request.rec_id)
