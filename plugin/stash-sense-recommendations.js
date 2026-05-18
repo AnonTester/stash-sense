@@ -1122,6 +1122,20 @@
         tab.textContent = `${label} (${count})`;
       });
 
+      // Defensive client-side ordering for Scene Stash-Box Tagger:
+      // high-confidence first, then confidence descending.
+      if (currentState.type === 'scene_fingerprint_match') {
+        result.recommendations.sort((a, b) => {
+          const aHigh = a?.details?.high_confidence ? 1 : 0;
+          const bHigh = b?.details?.high_confidence ? 1 : 0;
+          if (aHigh !== bHigh) return bHigh - aHigh;
+          const aConf = Number(a?.confidence || 0);
+          const bConf = Number(b?.confidence || 0);
+          if (aConf !== bConf) return bConf - aConf;
+          return Number(b?.id || 0) - Number(a?.id || 0);
+        });
+      }
+
       const listContent = container.querySelector('.ss-list-content');
 
       if (result.recommendations.length === 0) {

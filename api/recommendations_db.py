@@ -561,7 +561,12 @@ class RecommendationsDB:
 
         # Confidence-ranked recommendation types are reviewed primarily by confidence.
         # Keep this ordering stable across pending/resolved/dismissed groups.
-        if type in ("duplicate_scenes", "scene_fingerprint_match"):
+        if type == "scene_fingerprint_match":
+            query += (
+                " ORDER BY COALESCE(json_extract(details, '$.high_confidence'), 0) DESC, "
+                "COALESCE(confidence, 0) DESC, created_at DESC, id DESC LIMIT ? OFFSET ?"
+            )
+        elif type == "duplicate_scenes":
             query += " ORDER BY COALESCE(confidence, 0) DESC, created_at DESC, id DESC LIMIT ? OFFSET ?"
         else:
             query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
@@ -711,6 +716,15 @@ class RecommendationsDB:
                     pass  # Already dismissed
 
             return len(rec_ids)
+
+    def delete_pending_recommendations_by_type(self, rec_type: str) -> int:
+        """Delete all pending recommendations for a type. Returns deleted row count."""
+        with self._connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM recommendations WHERE type = ? AND status = 'pending'",
+                (rec_type,),
+            )
+            return cursor.rowcount or 0
 
     def is_dismissed(self, type: str, target_type: str, target_id: str) -> bool:
         """Check if a target has been dismissed."""

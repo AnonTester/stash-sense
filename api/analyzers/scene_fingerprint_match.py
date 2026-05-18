@@ -25,6 +25,20 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
         if not connections:
             return AnalysisResult(items_processed=0, recommendations_created=0)
 
+        # Manual/full scans should rebuild pending recommendations from scratch
+        # so stale entries (e.g. scenes linked after previous runs) disappear.
+        if not incremental:
+            cleared_raw = self.rec_db.delete_pending_recommendations_by_type(self.type)
+            try:
+                cleared = int(cleared_raw or 0)
+            except Exception:
+                cleared = 0
+            if cleared > 0:
+                logger.warning(
+                    "[%s] Cleared %d stale pending recommendations before full scan",
+                    self.type, cleared,
+                )
+
         # Load user-configurable thresholds
         min_count = self._get_setting("scene_fp_min_count", 2)
         min_percentage = self._get_setting("scene_fp_min_percentage", 66)
@@ -161,6 +175,11 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
                 local_fps = item["fingerprints"]
                 local_duration = item["duration"]
                 is_ambiguous = len(matches) > 1
+                local_hashes_norm = {
+                    str(fp.get("hash", "")).strip().lower()
+                    for fp in local_fps
+                    if fp.get("hash")
+                }
 
                 for match in matches:
                     # Build composite target_id for pair-based dismissal
@@ -170,11 +189,16 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
                         continue
 
                     # Find which local fingerprints matched this stash-box scene
-                    local_hashes = {fp["hash"] for fp in local_fps}
                     matching_fps = [
                         fp for fp in match.get("fingerprints", [])
-                        if fp["hash"] in local_hashes
+                        if str(fp.get("hash", "")).strip().lower() in local_hashes_norm
                     ]
+
+                    # Defensive filter: if stash-box returned a candidate but no
+                    # overlapping fingerprints remain after normalization, skip it.
+                    # This avoids suggestions with effectively no shared signal.
+                    if not matching_fps:
+                        continue
 
                     score_result = score_match(
                         matching_fingerprints=matching_fps,
