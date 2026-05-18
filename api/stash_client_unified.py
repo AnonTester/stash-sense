@@ -11,9 +11,12 @@ All async requests go through the rate limiter to prevent overwhelming Stash.
 """
 
 import httpx
+import logging
 from typing import Optional
 
 from rate_limiter import RateLimiter, Priority
+
+logger = logging.getLogger(__name__)
 
 
 class StashClientUnified:
@@ -1047,22 +1050,79 @@ class StashClientUnified:
         self, source_ids: list[str], destination_id: str,
     ) -> dict:
         """Merge source scenes into destination scene via Stash's sceneMerge mutation."""
-        query = """
+        query_count = """
         mutation SceneMerge($input: SceneMergeInput!) {
           sceneMerge(input: $input) {
             count
           }
         }
         """
-        variables = {
-            "input": {
+        query_scene = """
+        mutation SceneMerge($input: SceneMergeInput!) {
+          sceneMerge(input: $input) {
+            id
+          }
+        }
+        """
+
+        async def _execute_scene_merge(query: str, include_play_history: bool = True) -> dict:
+            payload = {
                 "source": source_ids,
                 "destination": destination_id,
-                "play_history": True,
-                "o_history": True,
             }
-        }
-        data = await self._execute(query, variables)
+            if include_play_history:
+                payload["play_history"] = True
+            variables = {"input": payload}
+            return await self._execute(query, variables, priority=Priority.CRITICAL)
+
+        # Try count-based response shape first; older/newer Stash schemas differ.
+        try:
+            data = await _execute_scene_merge(query_count, include_play_history=True)
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            # Compatibility fallback: older schemas may not support play_history.
+            if "play_history" in msg:
+                logger.warning(
+                    "sceneMerge rejected play_history; retrying without optional fields: %s",
+                    exc,
+                )
+                try:
+                    data = await _execute_scene_merge(query_count, include_play_history=False)
+                except RuntimeError as exc_no_hist:
+                    msg_no_hist = str(exc_no_hist).lower()
+                    if "cannot query field" in msg_no_hist and "count" in msg_no_hist:
+                        logger.warning(
+                            "sceneMerge does not expose count after play_history fallback; "
+                            "retrying with scene return type: %s",
+                            exc_no_hist,
+                        )
+                        data = await _execute_scene_merge(query_scene, include_play_history=False)
+                    else:
+                        raise
+            # Some schemas return a Scene from sceneMerge (no `count` field).
+            elif "cannot query field" in msg and "count" in msg:
+                logger.warning(
+                    "sceneMerge does not expose count; retrying with scene return type: %s",
+                    exc,
+                )
+                try:
+                    data = await _execute_scene_merge(query_scene, include_play_history=True)
+                except RuntimeError as exc_scene:
+                    msg_scene = str(exc_scene).lower()
+                    if "play_history" in msg_scene:
+                        logger.warning(
+                            "sceneMerge(scene return type) rejected play_history; retrying without it: %s",
+                            exc_scene,
+                        )
+                        data = await _execute_scene_merge(query_scene, include_play_history=False)
+                    else:
+                        raise
+            else:
+                raise
+
+        # Return whatever shape this Stash schema emits for sceneMerge.
+        if not data.get("sceneMerge"):
+            return {}
         return data.get("sceneMerge", {})
 
     async def destroy_scene(
