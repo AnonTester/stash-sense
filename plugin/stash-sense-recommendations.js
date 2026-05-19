@@ -1788,21 +1788,36 @@
       return (bytes / (1024 * 1024)).toFixed(0) + ' MB';
     }
 
+    function renderLocalEntityLink(entityType, entityId, entityName) {
+      if (!entityName) return '';
+      if (!entityId) return escapeHtml(entityName);
+      return '<a class="ss-detail-entity-link" href="/' + entityType + '/' + encodeURIComponent(String(entityId)) + '" target="_blank" rel="noopener">' + escapeHtml(entityName) + '</a>';
+    }
+
+    function renderLocalPerformerLinks(performers) {
+      if (!performers || !performers.length) return '';
+      return performers.map(function(p) {
+        return renderLocalEntityLink('performers', p?.id, p?.name);
+      }).filter(Boolean).join(', ');
+    }
+
     function renderSceneCard(scene, id, otherId) {
       const file = scene?.files?.[0];
       const resolution = file ? file.width + 'x' + file.height : 'N/A';
       const screenshotUrl = relativeUrl(scene?.paths?.screenshot);
       const previewUrl = relativeUrl(scene?.paths?.preview);
+      const studioLink = renderLocalEntityLink('studios', scene?.studio?.id, scene?.studio?.name);
+      const performerLinks = renderLocalPerformerLinks(scene?.performers || []);
 
       return '<div class="ss-dup-scene-card" data-id="' + id + '">' +
         '<div class="ss-dup-scene-thumb">' +
           (screenshotUrl ? '<img src="' + screenshotUrl + '" alt="Scene ' + id + '" loading="lazy" onerror="this.style.display=\'none\'" />' : '<div class="ss-no-image">No Screenshot</div>') +
           (previewUrl ? '<video class="ss-dup-scene-preview" muted loop preload="none" data-src="' + previewUrl + '"></video>' : '') +
         '</div>' +
-        '<h4><a href="/scenes/' + id + '" target="_blank">' + escapeHtml(scene?.title || 'Unknown Scene') + '</a></h4>' +
+        '<h4><a href="/scenes/' + id + '" target="_blank" rel="noopener">' + escapeHtml(scene?.title || 'Unknown Scene') + '</a></h4>' +
         '<ul class="ss-dup-scene-meta">' +
-          (scene?.studio?.name ? '<li><strong>Studio:</strong> ' + escapeHtml(scene.studio.name) + '</li>' : '') +
-          (scene?.performers?.length ? '<li><strong>Performers:</strong> ' + scene.performers.map(function(p) { return escapeHtml(p.name); }).join(', ') + '</li>' : '') +
+          (studioLink ? '<li><strong>Studio:</strong> ' + studioLink + '</li>' : '') +
+          (performerLinks ? '<li><strong>Performers:</strong> ' + performerLinks + '</li>' : '') +
           (scene?.date ? '<li><strong>Date:</strong> ' + scene.date + '</li>' : '') +
           '<li><strong>Duration:</strong> ' + formatDuration(file?.duration) + '</li>' +
           (file ? '<li><strong>File:</strong> ' + resolution + ' &middot; ' + (file.video_codec || 'N/A') + ' &middot; ' + formatFileSize(file.size) + '</li>' : '') +
@@ -4377,7 +4392,39 @@
     const isPending = rec.status === 'pending';
     const localSceneId = String(d.local_scene_id || '');
     const localSceneHref = `/scenes/${localSceneId}`;
-    const stashboxSceneHref = `${String(d.endpoint || '').replace(/\/graphql$/, '')}/scenes/${d.stashbox_scene_id}`;
+    const stashboxBaseHref = String(d.endpoint || '').replace(/\/graphql$/, '');
+    const stashboxSceneHref = `${stashboxBaseHref}/scenes/${d.stashbox_scene_id}`;
+
+    function buildEndpointEntityHref(entityType, entityId) {
+      if (!stashboxBaseHref || !entityId) return '';
+      return `${stashboxBaseHref}/${entityType}/${encodeURIComponent(String(entityId))}`;
+    }
+
+    function renderDetailLink(href, label) {
+      if (!label) return '';
+      if (!href) return escapeHtml(label);
+      return `<a class="ss-detail-entity-link" href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>`;
+    }
+
+    function renderLocalEntityLink(entityType, entityId, entityName) {
+      if (!entityName) return '';
+      if (!entityId) return escapeHtml(entityName);
+      return renderDetailLink(`/${entityType}/${encodeURIComponent(String(entityId))}`, entityName);
+    }
+
+    function renderLocalPerformerLinks(performers) {
+      return (performers || [])
+        .map(p => renderLocalEntityLink('performers', p?.id, p?.name))
+        .filter(Boolean)
+        .join(', ');
+    }
+
+    function renderUpstreamPerformerLinks(performers) {
+      return (performers || [])
+        .map(p => renderDetailLink(buildEndpointEntityHref('performers', p?.id), p?.name))
+        .filter(Boolean)
+        .join(', ');
+    }
 
     container.innerHTML = '<div class="ss-loading">Loading scene details...</div>';
 
@@ -4390,10 +4437,19 @@
 
     const localScreenshotUrl = relativeUrl(localScene?.paths?.screenshot);
     const localPreviewUrl = relativeUrl(localScene?.paths?.preview);
-    const localStudio = localScene?.studio?.name || '';
-    const localPerformers = (localScene?.performers || []).map(p => p?.name).filter(Boolean);
+    const localStudio = localScene?.studio || null;
+    const localPerformers = localScene?.performers || [];
+    const localStudioLink = renderLocalEntityLink('studios', localStudio?.id, localStudio?.name);
+    const localPerformerLinks = renderLocalPerformerLinks(localPerformers);
     const localDate = localScene?.date || '';
     const stashboxCoverUrl = d.stashbox_cover_url;
+    const upstreamStudioLink = d.stashbox_studio
+      ? renderDetailLink(buildEndpointEntityHref('studios', d.stashbox_studio_id), d.stashbox_studio)
+      : '';
+    const upstreamPerformers = Array.isArray(d.stashbox_performer_links)
+      ? d.stashbox_performer_links
+      : (d.stashbox_performers || []).map((name) => ({ id: null, name }));
+    const upstreamPerformerLinks = renderUpstreamPerformerLinks(upstreamPerformers);
 
     container.innerHTML = `
       <div class="ss-fp-detail">
@@ -4420,8 +4476,8 @@
             <div class="ss-fp-scene-title">
               <a href="${escapeHtml(localSceneHref)}" target="_blank" rel="noopener">${escapeHtml(d.local_scene_title || 'Unknown')}</a>
             </div>
-            ${localStudio ? `<div class="ss-fp-field"><strong>Studio:</strong> ${escapeHtml(localStudio)}</div>` : ''}
-            ${localPerformers.length ? `<div class="ss-fp-field"><strong>Performers:</strong> ${localPerformers.map(escapeHtml).join(', ')}</div>` : ''}
+            ${localStudioLink ? `<div class="ss-fp-field"><strong>Studio:</strong> ${localStudioLink}</div>` : ''}
+            ${localPerformerLinks ? `<div class="ss-fp-field"><strong>Performers:</strong> ${localPerformerLinks}</div>` : ''}
             ${localDate ? `<div class="ss-fp-field"><strong>Date:</strong> ${escapeHtml(localDate)}</div>` : ''}
             <div class="ss-fp-field"><strong>Duration:</strong> ${d.duration_local ? formatDuration(d.duration_local) : 'N/A'}</div>
             <div class="ss-fp-field"><strong>Fingerprints:</strong> ${d.total_local_fingerprints}</div>
@@ -4438,13 +4494,13 @@
             <div class="ss-fp-scene-title">
               <a href="${escapeHtml(stashboxSceneHref)}" target="_blank" rel="noopener">${escapeHtml(d.stashbox_scene_title || 'Unknown')}</a>
             </div>
-            ${d.stashbox_studio ? `<div class="ss-fp-field"><strong>Studio:</strong> ${escapeHtml(d.stashbox_studio)}</div>` : ''}
-            ${d.stashbox_performers?.length ? `<div class="ss-fp-field"><strong>Performers:</strong> ${d.stashbox_performers.map(escapeHtml).join(', ')}</div>` : ''}
+            ${upstreamStudioLink ? `<div class="ss-fp-field"><strong>Studio:</strong> ${upstreamStudioLink}</div>` : ''}
+            ${upstreamPerformerLinks ? `<div class="ss-fp-field"><strong>Performers:</strong> ${upstreamPerformerLinks}</div>` : ''}
             ${d.stashbox_date ? `<div class="ss-fp-field"><strong>Date:</strong> ${d.stashbox_date}</div>` : ''}
             <div class="ss-fp-field"><strong>Duration:</strong> ${d.duration_remote ? formatDuration(d.duration_remote) : 'N/A'}</div>
             <div class="ss-fp-field">
               <strong>Endpoint:</strong>
-              <a href="${escapeHtml(stashboxSceneHref)}" target="_blank" rel="noopener">${escapeHtml(d.endpoint_name || d.endpoint)}</a>
+              <a class="ss-detail-entity-link" href="${escapeHtml(stashboxSceneHref)}" target="_blank" rel="noopener">${escapeHtml(d.endpoint_name || d.endpoint)}</a>
             </div>
           </div>
         </div>

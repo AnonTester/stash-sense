@@ -3462,6 +3462,7 @@ a.ss-upstream-endpoint-badge:hover {
 
 .ss-fp-scene-title a:hover {
   color: var(--bs-primary, #0d6efd);
+  text-decoration: underline;
 }
 
 .ss-fp-detail-divider {
@@ -3477,6 +3478,16 @@ a.ss-upstream-endpoint-badge:hover {
 
 .ss-fp-field strong {
   color: var(--bs-body-color, #fff);
+}
+
+.ss-detail-entity-link {
+  color: var(--bs-primary, #0d6efd);
+  text-decoration: none;
+}
+
+a.ss-detail-entity-link:hover {
+  color: var(--bs-primary, #0d6efd);
+  text-decoration: underline;
 }
 
 /* Detail view - fingerprint table */
@@ -3630,12 +3641,13 @@ a.ss-upstream-endpoint-badge:hover {
 }
 
 .ss-dup-scene-card h4 a {
-  color: var(--bs-body-color);
+  color: var(--bs-body-color, #fff);
   text-decoration: none;
 }
 
 .ss-dup-scene-card h4 a:hover {
-  color: var(--bs-primary);
+  color: var(--bs-primary, #0d6efd);
+  text-decoration: underline;
 }
 
 .ss-dup-scene-meta {

@@ -216,11 +216,16 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
                         )
                     )
 
-                    performers = [
-                        p["performer"]["name"]
-                        for p in (match.get("performers") or [])
-                        if p.get("performer")
-                    ]
+                    performer_links = []
+                    for p in (match.get("performers") or []):
+                        perf = p.get("performer")
+                        if not perf:
+                            continue
+                        performer_links.append({
+                            "id": str(perf.get("id")) if perf.get("id") is not None else None,
+                            "name": perf.get("name"),
+                        })
+                    performers = [p["name"] for p in performer_links if p.get("name")]
                     studio = match.get("studio")
                     images = match.get("images") or []
 
@@ -232,7 +237,9 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
                         "stashbox_scene_id": match["id"],
                         "stashbox_scene_title": match.get("title"),
                         "stashbox_studio": studio.get("name") if studio else None,
+                        "stashbox_studio_id": str(studio.get("id")) if studio and studio.get("id") is not None else None,
                         "stashbox_performers": performers,
+                        "stashbox_performer_links": performer_links,
                         # release_date is the canonical StashBox field; date kept as legacy fallback
                         "stashbox_date": match.get("release_date") or match.get("date"),
                         "stashbox_cover_url": images[0]["url"] if images else None,
