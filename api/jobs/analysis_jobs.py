@@ -34,9 +34,21 @@ class AnalysisJob(BaseJob):
 
         # Bridge progress from analyzer → job queue for frontend polling
         def progress_callback(items_processed: int, items_total: Optional[int]) -> None:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            loop.create_task(context.report_progress(items_processed, items_total))
+            try:
+                # Write queue progress synchronously for deterministic UI updates.
+                # Fire-and-forget async tasks can drop/interleave updates under load.
+                db.update_job_progress(
+                    context.job_id,
+                    items_processed=items_processed,
+                    items_total=items_total,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to persist queue progress for job %s (%s)",
+                    context.job_id,
+                    self._type_id,
+                    exc_info=True,
+                )
 
         analyzer = analyzer_class(stash, db, run_id=run_id)
         analyzer._job_progress_callback = progress_callback

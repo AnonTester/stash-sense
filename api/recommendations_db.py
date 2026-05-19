@@ -726,6 +726,56 @@ class RecommendationsDB:
             )
             return cursor.rowcount or 0
 
+    def dismiss_pending_scene_fingerprint_for_scene(
+        self,
+        scene_id: str,
+        reason: Optional[str] = None,
+        exclude_rec_id: Optional[int] = None,
+    ) -> int:
+        """
+        Dismiss pending scene_fingerprint_match recommendations for one local scene.
+
+        Matches by target_id prefix: "<scene_id>|...".
+        Returns number of recommendations dismissed.
+        """
+        scene_prefix = f"{str(scene_id)}|%"
+
+        with self._connection() as conn:
+            query = (
+                "SELECT id, type, target_type, target_id "
+                "FROM recommendations "
+                "WHERE type = 'scene_fingerprint_match' "
+                "AND target_type = 'scene' "
+                "AND status = 'pending' "
+                "AND target_id LIKE ?"
+            )
+            params: list[Any] = [scene_prefix]
+            if exclude_rec_id is not None:
+                query += " AND id != ?"
+                params.append(exclude_rec_id)
+
+            rows = conn.execute(query, params).fetchall()
+            if not rows:
+                return 0
+
+            rec_ids = [row["id"] for row in rows]
+            conn.execute(
+                f"UPDATE recommendations SET status = 'dismissed', updated_at = datetime('now') WHERE id IN ({','.join('?' * len(rec_ids))})",
+                rec_ids,
+            )
+
+            # Keep dismissed_targets in sync with normal dismiss behavior.
+            for row in rows:
+                try:
+                    conn.execute(
+                        "INSERT INTO dismissed_targets (type, target_type, target_id, reason, permanent) VALUES (?, ?, ?, ?, ?)",
+                        (row["type"], row["target_type"], row["target_id"], reason, 0),
+                    )
+                except sqlite3.IntegrityError:
+                    pass
+
+            return len(rec_ids)
+
     def is_dismissed(self, type: str, target_type: str, target_id: str) -> bool:
         """Check if a target has been dismissed."""
         with self._connection() as conn:

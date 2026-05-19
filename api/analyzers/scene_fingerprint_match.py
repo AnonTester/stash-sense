@@ -89,6 +89,8 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
         fetched_scenes = 0
         skipped_with_links = 0
         skipped_without_fingerprints = 0
+        stale_dismissed = 0
+        linked_scene_ids: set[str] = set()
 
         while True:
             scenes, total = await self.stash.get_scenes_with_fingerprints(
@@ -109,6 +111,7 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
                 existing_stash_ids = scene.get("stash_ids") or []
                 if existing_stash_ids:
                     skipped_with_links += 1
+                    linked_scene_ids.add(str(scene["id"]))
                     continue
 
                 # Collect fingerprints from all files
@@ -136,14 +139,26 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
             if offset >= total:
                 break
 
+        # Clean up stale pending recommendations for scenes that are now linked.
+        # This keeps Scene Stash-Box Tagger results limited to truly unlinked scenes.
+        for linked_scene_id in linked_scene_ids:
+            stale_dismissed += self.rec_db.dismiss_pending_scene_fingerprint_for_scene(
+                scene_id=linked_scene_id,
+                reason=(
+                    f"Auto-dismissed: local scene {linked_scene_id} already has stash_id link(s)"
+                ),
+            )
+
         logger.warning(
             "[%s] Scene fingerprint scan summary: fetched=%d, candidates=%d, "
-            "skipped_linked=%d, skipped_no_fingerprints=%d, incremental=%s, watermark=%s",
+            "skipped_linked=%d, skipped_no_fingerprints=%d, stale_dismissed=%d, "
+            "incremental=%s, watermark=%s",
             endpoint_name,
             fetched_scenes,
             len(scenes_needing_match),
             skipped_with_links,
             skipped_without_fingerprints,
+            stale_dismissed,
             incremental,
             watermark_ts or "-",
         )

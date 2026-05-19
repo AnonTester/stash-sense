@@ -330,6 +330,41 @@ async def list_recommendations(
         limit=limit,
         offset=offset,
     )
+
+    # Scene Stash-Box Tagger only applies to scenes without any stash_id.
+    # If stale pending recommendations exist for now-linked scenes, auto-dismiss
+    # them as part of list rendering so users don't see invalid entries.
+    if status == "pending" and type == "scene_fingerprint_match" and recs:
+        stash = get_stash_client()
+        scene_ids = {
+            str((r.details or {}).get("local_scene_id", "")).strip()
+            for r in recs
+        }
+        scene_ids.discard("")
+        dismissed = 0
+        for scene_id in scene_ids:
+            try:
+                scene = await stash.get_scene_by_id(scene_id)
+            except Exception:
+                continue
+            if not scene:
+                continue
+            if scene.get("stash_ids"):
+                dismissed += db.dismiss_pending_scene_fingerprint_for_scene(
+                    scene_id=scene_id,
+                    reason=(
+                        f"Auto-dismissed during list refresh: local scene {scene_id} already has stash_id link(s)"
+                    ),
+                )
+        if dismissed:
+            recs = db.get_recommendations(
+                status=status,
+                type=type,
+                target_type=target_type,
+                limit=limit,
+                offset=offset,
+            )
+
     return RecommendationListResponse(
         recommendations=[
             RecommendationResponse(
@@ -1744,22 +1779,14 @@ async def _accept_fingerprint_match(
 
     db.resolve_recommendation(rec_id, action="accepted")
 
-    # Accepting one match for a local scene should dismiss other pending matches
-    # for that same scene to avoid contradictory follow-up recommendations.
-    pending_fp_recs = db.get_recommendations(
-        status="pending", type="scene_fingerprint_match", limit=10000,
-    )
+    # Accepting one match for a local scene should dismiss all other pending
+    # matches for that same scene (across endpoints).
     scene_id_str = str(scene_id)
-    for other in pending_fp_recs:
-        if other.id == rec_id:
-            continue
-        other_scene_id = str((other.details or {}).get("local_scene_id", ""))
-        if other_scene_id != scene_id_str:
-            continue
-        db.dismiss_recommendation(
-            other.id,
-            reason=f"Auto-dismissed after accepting scene fingerprint match for local scene {scene_id_str}",
-        )
+    db.dismiss_pending_scene_fingerprint_for_scene(
+        scene_id=scene_id_str,
+        exclude_rec_id=rec_id,
+        reason=f"Auto-dismissed after accepting scene fingerprint match for local scene {scene_id_str}",
+    )
 
 
 @router.post("/actions/accept-fingerprint-match", response_model=SuccessResponse)
