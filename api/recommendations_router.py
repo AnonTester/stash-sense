@@ -334,11 +334,12 @@ async def list_recommendations(
     # Scene Stash-Box Tagger only applies to scenes without any stash_id.
     # If stale pending recommendations exist for now-linked scenes, auto-dismiss
     # them as part of list rendering so users don't see invalid entries.
-    if status == "pending" and type == "scene_fingerprint_match" and recs:
+    if status == "pending" and recs and (type is None or type == "scene_fingerprint_match"):
         stash = get_stash_client()
         scene_ids = {
             str((r.details or {}).get("local_scene_id", "")).strip()
             for r in recs
+            if r.type == "scene_fingerprint_match"
         }
         scene_ids.discard("")
         dismissed = 0
@@ -450,6 +451,8 @@ ANALYZERS = {
     "scene_fingerprint_match": SceneFingerprintMatchAnalyzer,
 }
 
+FORCE_FULL_SCAN_USER_ANALYSIS_TYPES = {"scene_fingerprint_match", "upstream_scene_changes"}
+
 
 @router.get("/analysis/types", response_model=AnalysisTypesResponse)
 async def list_analysis_types():
@@ -478,11 +481,12 @@ async def run_analysis(type: str, full: bool = False):
 
     from job_models import JobPriority
     from jobs.analysis_jobs import FULL_RUN_CURSOR
+    force_full = full or (type in FORCE_FULL_SCAN_USER_ANALYSIS_TYPES)
     job_id = _queue_manager.submit(
         type_id=type,
         triggered_by="user",
         priority=JobPriority.HIGH,
-        cursor=FULL_RUN_CURSOR if full else None,
+        cursor=FULL_RUN_CURSOR if force_full else None,
     )
     if job_id is None:
         raise HTTPException(status_code=409, detail=f"Analysis '{type}' is already running or queued")

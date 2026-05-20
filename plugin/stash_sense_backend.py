@@ -565,11 +565,9 @@ def handle_recommendations(mode, args, sidecar_url):
         if not analysis_type:
             return {"error": "No analysis_type provided"}
         full_arg = args.get("full")
-        full = (
-            bool(full_arg)
-            if full_arg is not None
-            else analysis_type == "scene_fingerprint_match"
-        )
+        full = bool(full_arg) if full_arg is not None else False
+        if analysis_type in FORCE_FULL_SCAN_USER_JOB_TYPES:
+            full = True
         return rec_run_analysis(
             sidecar_url,
             analysis_type,
