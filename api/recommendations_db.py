@@ -567,7 +567,13 @@ class RecommendationsDB:
                 "COALESCE(confidence, 0) DESC, created_at DESC, id DESC LIMIT ? OFFSET ?"
             )
         elif type == "duplicate_scenes":
-            query += " ORDER BY COALESCE(confidence, 0) DESC, created_at DESC, id DESC LIMIT ? OFFSET ?"
+            query += (
+                " ORDER BY COALESCE("
+                "confidence, "
+                "CAST(json_extract(details, '$.confidence') AS REAL) / 100.0, "
+                "0"
+                ") DESC, created_at DESC, id DESC LIMIT ? OFFSET ?"
+            )
         else:
             query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])

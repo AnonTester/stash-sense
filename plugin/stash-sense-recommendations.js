@@ -346,6 +346,20 @@
     return hasTagChanges || hasSimpleChanges;
   }
 
+  function parseConfidencePercent(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    if (numeric <= 1) return numeric * 100;
+    return numeric;
+  }
+
+  function getDuplicateSceneConfidencePercent(rec) {
+    const detailConfidence = parseConfidencePercent(rec?.details?.confidence);
+    if (detailConfidence !== null) return detailConfidence;
+    const recommendationConfidence = parseConfidencePercent(rec?.confidence);
+    return recommendationConfidence !== null ? recommendationConfidence : 0;
+  }
+
   // Session cache for entities created during this session
   // Maps "endpoint|stashbox_id" -> local_id
   const entityCache = new Map();
@@ -1134,6 +1148,14 @@
           if (aConf !== bConf) return bConf - aConf;
           return Number(b?.id || 0) - Number(a?.id || 0);
         });
+      } else if (currentState.type === 'duplicate_scenes') {
+        // Defensive client-side ordering to keep each status group sorted by confidence.
+        result.recommendations.sort((a, b) => {
+          const aConf = getDuplicateSceneConfidencePercent(a);
+          const bConf = getDuplicateSceneConfidencePercent(b);
+          if (aConf !== bConf) return bConf - aConf;
+          return Number(b?.id || 0) - Number(a?.id || 0);
+        });
       }
 
       const listContent = container.querySelector('.ss-list-content');
@@ -1255,7 +1277,7 @@
 
     if (rec.type === 'duplicate_scenes') {
       const d = details;
-      const conf = d.confidence || (rec.confidence * 100);
+      const conf = getDuplicateSceneConfidencePercent(rec);
       const confColor = conf >= 80 ? '#28a745' : conf >= 60 ? '#ffc107' : '#6c757d';
       const sb = d.signal_breakdown || {};
       const primarySignal = sb.stashbox_match ? 'Stash-box match'
@@ -1770,7 +1792,7 @@
       return;
     }
 
-    const conf = details.confidence || (rec.confidence * 100);
+    const conf = getDuplicateSceneConfidencePercent(rec);
     const confColor = conf >= 80 ? '#28a745' : conf >= 60 ? '#ffc107' : '#6c757d';
     const reasoning = details.reasoning || [];
 
