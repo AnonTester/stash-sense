@@ -3772,8 +3772,15 @@
               createBtn.disabled = true;
               createBtn.textContent = 'Creating...';
               try {
+                const performerPayload = { name: perf.name };
+                if (Array.isArray(perf.aliases) && perf.aliases.length) {
+                  performerPayload.aliases = perf.aliases;
+                }
+                if (perf.gender) {
+                  performerPayload.gender = perf.gender;
+                }
                 const result = await RecommendationsAPI.createPerformer(
-                  { name: perf.name },
+                  performerPayload,
                   endpoint,
                   perf.id
                 );

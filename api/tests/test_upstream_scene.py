@@ -172,8 +172,8 @@ class TestSceneFieldMapper:
         result = normalize_upstream_scene(upstream)
         assert result["studio"] == {"id": "studio-1", "name": "Studio A"}
         assert len(result["performers"]) == 2
-        assert result["performers"][0] == {"id": "perf-1", "name": "Jane", "gender": None, "as": "Jane Smith"}
-        assert result["performers"][1] == {"id": "perf-2", "name": "John", "gender": None, "as": None}
+        assert result["performers"][0] == {"id": "perf-1", "name": "Jane", "aliases": [], "gender": None, "as": "Jane Smith"}
+        assert result["performers"][1] == {"id": "perf-2", "name": "John", "aliases": [], "gender": None, "as": None}
         assert len(result["tags"]) == 2
         assert result["tags"][0] == {"id": "tag-1", "name": "HD"}
 
@@ -1067,6 +1067,9 @@ class TestEntityCreation:
         stash.create_studio = AsyncMock(return_value={"id": "100", "name": "New Studio"})
         stash.create_performer = AsyncMock(return_value={"id": "200", "name": "New Performer"})
         stash.create_tag = AsyncMock(return_value={"id": "300", "name": "New Tag"})
+        stash.search_performers = AsyncMock(return_value=[])
+        stash.update_performer = AsyncMock(return_value={"id": "200"})
+        stash.get_all_performers = AsyncMock(return_value=[])
         stash.search_tags = AsyncMock(return_value=[])
         stash.get_all_tags_with_aliases = AsyncMock(return_value=[])
         stash.update_tag = AsyncMock(return_value={"id": "300"})
@@ -1087,6 +1090,55 @@ class TestEntityCreation:
         call_kwargs = mock_stash.create_performer.call_args[1]
         assert call_kwargs["name"] == "Jane Doe"
         assert call_kwargs["stash_ids"] == [{"endpoint": "https://stashdb.org/graphql", "stash_id": "perf-uuid-1"}]
+
+    @pytest.mark.asyncio
+    async def test_create_performer_from_stashbox_links_existing_alias_match(self, mock_stash):
+        """Links stash_id to an existing local performer by alias instead of creating."""
+        from recommendations_router import _create_performer_from_stashbox
+        mock_stash.search_performers = AsyncMock(return_value=[
+            {"id": "42", "name": "Main Name", "alias_list": ["Jane Doe"], "stash_ids": []}
+        ])
+
+        result = await _create_performer_from_stashbox(
+            mock_stash,
+            stashbox_data={"name": "Jane Doe"},
+            endpoint="https://theporndb.net/graphql",
+            stashbox_id="perf-uuid-2",
+        )
+
+        assert result["id"] == "42"
+        mock_stash.create_performer.assert_not_called()
+        mock_stash.update_performer.assert_called_once_with(
+            "42",
+            stash_ids=[{"endpoint": "https://theporndb.net/graphql", "stash_id": "perf-uuid-2"}],
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_performer_from_stashbox_duplicate_error_falls_back_to_link(self, mock_stash):
+        """If create fails with duplicate-name error, fallback links existing performer."""
+        from recommendations_router import _create_performer_from_stashbox
+        mock_stash.search_performers = AsyncMock(side_effect=[
+            [],
+            [{"id": "42", "name": "Jane Doe", "alias_list": [], "stash_ids": []}],
+        ])
+        mock_stash.create_performer = AsyncMock(
+            side_effect=RuntimeError(
+                "GraphQL error: [{'message': \"performer with name 'Jane Doe' already exists\", 'path': ['performerCreate']}]"
+            )
+        )
+
+        result = await _create_performer_from_stashbox(
+            mock_stash,
+            stashbox_data={"name": "Jane Doe"},
+            endpoint="https://stashdb.org/graphql",
+            stashbox_id="perf-uuid-1",
+        )
+
+        assert result["id"] == "42"
+        mock_stash.update_performer.assert_called_once_with(
+            "42",
+            stash_ids=[{"endpoint": "https://stashdb.org/graphql", "stash_id": "perf-uuid-1"}],
+        )
 
     @pytest.mark.asyncio
     async def test_create_tag_from_stashbox(self, mock_stash):

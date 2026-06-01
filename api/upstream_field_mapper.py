@@ -716,6 +716,7 @@ def normalize_upstream_scene(upstream: dict) -> dict:
         performers.append({
             "id": perf.get("id"),
             "name": perf.get("name"),
+            "aliases": perf.get("aliases") or [],
             "gender": perf.get("gender"),
             "as": pa.get("as"),
         })

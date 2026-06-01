@@ -489,3 +489,35 @@ class TestMergeScenesAction:
         assert db.get_recommendation(dup_pair_b) is None
         assert db.get_recommendation(dup_files_dest) is None
         assert db.get_recommendation(keep_other) is not None
+
+
+class TestSearchEntitiesAction:
+    """Test POST /recommendations/actions/search-entities."""
+
+    def test_search_performer_returns_aliases_and_normalized_link_state(self, client):
+        rec_mod.stash_client.search_performers = AsyncMock(return_value=[
+            {
+                "id": "11",
+                "name": "Jane Doe",
+                "disambiguation": "Performer",
+                "alias_list": ["JD", "Jane D"],
+                "stash_ids": [
+                    {"endpoint": "https://stashdb.org/graphql", "stash_id": "perf-1"}
+                ],
+            }
+        ])
+
+        resp = client.post(
+            "/recommendations/actions/search-entities",
+            json={
+                "entity_type": "performer",
+                "query": "JD",
+                "endpoint": "https://stashdb.org/graphql/",
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["results"]) == 1
+        assert data["results"][0]["aliases"] == ["JD", "Jane D"]
+        assert data["results"][0]["linked"] is True

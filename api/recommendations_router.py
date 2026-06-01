@@ -1330,14 +1330,40 @@ class UpdateSceneRequest(BaseModel):
 
 
 async def _create_performer_from_stashbox(stash, stashbox_data: dict, endpoint: str, stashbox_id: str) -> dict:
-    """Create a local performer from StashBox data with stash_id link."""
-    fields = {"name": stashbox_data.get("name", "")}
+    """Create (or link) a local performer from StashBox data with stash_id link."""
+    performer_name = (stashbox_data.get("name") or "").strip()
+    if not performer_name:
+        raise HTTPException(status_code=422, detail="Performer name is required")
+
+    existing = await _link_existing_performer_by_name_or_alias(
+        stash,
+        performer_name,
+        endpoint,
+        stashbox_id,
+    )
+    if existing:
+        return existing
+
+    fields = {"name": performer_name}
     if stashbox_data.get("aliases"):
         fields["alias_list"] = stashbox_data["aliases"]
     if stashbox_data.get("gender"):
         fields["gender"] = stashbox_data["gender"]
     fields["stash_ids"] = [{"endpoint": endpoint, "stash_id": stashbox_id}]
-    return await stash.create_performer(**fields)
+    try:
+        return await stash.create_performer(**fields)
+    except RuntimeError as exc:
+        if "already exists" not in str(exc).lower():
+            raise
+        existing = await _link_existing_performer_by_name_or_alias(
+            stash,
+            performer_name,
+            endpoint,
+            stashbox_id,
+        )
+        if existing:
+            return existing
+        raise
 
 
 def _normalize_endpoint_for_compare(endpoint: Optional[str]) -> str:
@@ -1364,6 +1390,61 @@ def _stash_id_link_exists(stash_ids: list[dict], endpoint: str, stashbox_id: str
         if sid_endpoint_norm == endpoint_norm and sid_stash_id == stash_id_str:
             return True
     return False
+
+
+def _performer_matches_name_or_alias(performer: dict, expected_name: str) -> bool:
+    """Match performer by exact normalized name or alias."""
+    name_norm = (expected_name or "").strip().lower()
+    if not name_norm:
+        return False
+
+    if (performer.get("name") or "").strip().lower() == name_norm:
+        return True
+
+    aliases = performer.get("alias_list")
+    if aliases is None:
+        aliases = performer.get("aliases")
+
+    alias_set = {str(a).strip().lower() for a in (aliases or []) if str(a).strip()}
+    return name_norm in alias_set
+
+
+async def _link_existing_performer_by_name_or_alias(
+    stash,
+    performer_name: str,
+    endpoint: str,
+    stashbox_id: str,
+) -> Optional[dict]:
+    """Find and link an existing local performer matching by name/alias."""
+    local_matches = await stash.search_performers(performer_name, limit=25)
+
+    # Some backends may not include alias hits in search results. Fall back to
+    # a full performer scan for exact name/alias match before creating duplicates.
+    if not any(_performer_matches_name_or_alias(match, performer_name) for match in local_matches):
+        try:
+            all_performers = await stash.get_all_performers()
+            local_matches = [*local_matches, *all_performers]
+        except Exception:
+            # If fallback query fails, continue with search results only.
+            pass
+
+    for match in local_matches:
+        if not _performer_matches_name_or_alias(match, performer_name):
+            continue
+        current_stash_ids = list(match.get("stash_ids") or [])
+        if not _stash_id_link_exists(current_stash_ids, endpoint, stashbox_id):
+            current_stash_ids.append({"endpoint": endpoint, "stash_id": stashbox_id})
+            await stash.update_performer(match["id"], stash_ids=current_stash_ids)
+            logger.warning(
+                "Linked existing performer '%s' (ID: %s) to StashBox %s on %s",
+                match.get("name"),
+                match.get("id"),
+                stashbox_id,
+                endpoint,
+            )
+        return {"id": match["id"], "name": match.get("name")}
+
+    return None
 
 
 def _tag_matches_name_or_alias(tag: dict, expected_name: str) -> bool:
@@ -1586,8 +1667,10 @@ async def search_entities_action(request: SearchEntitiesRequest):
                     "id": p["id"],
                     "name": p["name"],
                     "disambiguation": p.get("disambiguation"),
+                    "aliases": p.get("alias_list") or p.get("aliases") or [],
                     "linked": any(
-                        s["endpoint"] == request.endpoint
+                        _normalize_endpoint_for_compare(s.get("endpoint"))
+                        == _normalize_endpoint_for_compare(request.endpoint)
                         for s in (p.get("stash_ids") or [])
                     ),
                     "stash_ids": p.get("stash_ids") or [],
@@ -1604,7 +1687,8 @@ async def search_entities_action(request: SearchEntitiesRequest):
                     "name": t["name"],
                     "aliases": t.get("aliases") or [],
                     "linked": any(
-                        s["endpoint"] == request.endpoint
+                        _normalize_endpoint_for_compare(s.get("endpoint"))
+                        == _normalize_endpoint_for_compare(request.endpoint)
                         for s in (t.get("stash_ids") or [])
                     ),
                     "stash_ids": t.get("stash_ids") or [],
@@ -1621,7 +1705,8 @@ async def search_entities_action(request: SearchEntitiesRequest):
                     "name": s["name"],
                     "aliases": s.get("aliases") or [],
                     "linked": any(
-                        sid["endpoint"] == request.endpoint
+                        _normalize_endpoint_for_compare(sid.get("endpoint"))
+                        == _normalize_endpoint_for_compare(request.endpoint)
                         for sid in (s.get("stash_ids") or [])
                     ),
                     "stash_ids": s.get("stash_ids") or [],

@@ -271,6 +271,14 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
             match_id = None
             if self._performer_name_lookup:
                 match_id = self._performer_name_lookup.get((perf.get("name") or "").strip().lower())
+                if not match_id:
+                    for alias in (perf.get("aliases") or []):
+                        alias_key = str(alias).strip().lower()
+                        if not alias_key:
+                            continue
+                        match_id = self._performer_name_lookup.get(alias_key)
+                        if match_id:
+                            break
             if match_id and str(match_id) in local_performer_ids:
                 # Keep replacement additions when the matched local performer is also
                 # being removed by stashbox ID in this same diff (merge/relink case).
@@ -484,7 +492,10 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
                 )
                 if not match_id:
                     for alias in (perf.get("aliases") or []):
-                        match_id = self._performer_name_lookup.get(alias.strip().lower())
+                        alias_key = str(alias).strip().lower()
+                        if not alias_key:
+                            continue
+                        match_id = self._performer_name_lookup.get(alias_key)
                         if match_id:
                             break
                 if match_id:
