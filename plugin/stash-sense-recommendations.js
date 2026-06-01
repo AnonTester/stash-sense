@@ -4728,6 +4728,7 @@
   function createEntitySearchDropdown(entityType, endpoint, stashboxId, onMatch, initialSearch) {
     const container = document.createElement('div');
     container.className = 'ss-entity-search-dropdown';
+    let resolved = false;
 
     const trigger = document.createElement('button');
     trigger.className = 'ss-btn ss-btn-sm ss-entity-link-btn';
@@ -4750,9 +4751,73 @@
 
     container.appendChild(panel);
 
+    function resolveMatch(localId, localName) {
+      if (resolved) return;
+      resolved = true;
+      onMatch(localId, localName);
+    }
+
+    function normalizeEndpoint(value) {
+      if (!value) return '';
+      let v = String(value).trim().toLowerCase().replace(/\/+$/, '');
+      if (v.startsWith('https://')) v = v.slice('https://'.length);
+      else if (v.startsWith('http://')) v = v.slice('http://'.length);
+      if (v.endsWith('/graphql')) v = v.slice(0, -'/graphql'.length);
+      return v;
+    }
+
+    function hasExactStashLink(result) {
+      const targetEndpoint = normalizeEndpoint(endpoint);
+      const targetStashId = String(stashboxId || '');
+      return (result.stash_ids || []).some(sid =>
+        normalizeEndpoint(sid.endpoint) === targetEndpoint &&
+        String(sid.stash_id || '') === targetStashId
+      );
+    }
+
+    function matchesNeedle(result, needleRaw) {
+      const needle = String(needleRaw || '').trim().toLowerCase();
+      if (!needle) return false;
+      const name = String(result.name || '').trim().toLowerCase();
+      if (name === needle) return true;
+      const aliases = Array.isArray(result.aliases) ? result.aliases : [];
+      return aliases.some(a => String(a || '').trim().toLowerCase() === needle);
+    }
+
     // Pre-fill query but keep explicit "Link" button visible.
     if (initialSearch) {
       input.value = initialSearch;
+      // Run the same lookup server-side on load so pre-existing links are
+      // auto-selected even when not present in in-browser cache.
+      setTimeout(async () => {
+        if (resolved) return;
+        const q = String(initialSearch || '').trim();
+        if (q.length < 2) return;
+        try {
+          const resp = await RecommendationsAPI.searchEntities(entityType, q, endpoint);
+          const results = resp.results || [];
+          if (!results.length) return;
+
+          const exactLinked = results.find(r => matchesNeedle(r, q) && hasExactStashLink(r));
+          if (exactLinked) {
+            resolveMatch(exactLinked.id, exactLinked.name);
+            return;
+          }
+
+          const nonLinkedMatches = results.filter(r => !r.linked && matchesNeedle(r, q));
+          if (nonLinkedMatches.length === 1) {
+            const r = nonLinkedMatches[0];
+            try {
+              await RecommendationsAPI.linkEntity(entityType, r.id, endpoint, stashboxId);
+              resolveMatch(r.id, r.name);
+            } catch (_) {
+              // Keep manual link flow available on failure.
+            }
+          }
+        } catch (_) {
+          // Keep manual link flow available on failure.
+        }
+      }, 0);
     }
 
     let debounceTimer = null;
@@ -4810,7 +4875,7 @@
               try {
                 await RecommendationsAPI.linkEntity(entityType, r.id, endpoint, stashboxId);
                 panel.style.display = 'none';
-                onMatch(r.id, r.name);
+                resolveMatch(r.id, r.name);
               } catch (err) {
                 item.textContent = `Failed: ${err.message}`;
               }
