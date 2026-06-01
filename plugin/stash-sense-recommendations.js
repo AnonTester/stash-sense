@@ -4671,101 +4671,9 @@
 
     container.appendChild(panel);
 
-    // Auto-expand and search if initialSearch provided
+    // Pre-fill query but keep explicit "Link" button visible.
     if (initialSearch) {
-      trigger.style.display = 'none'; // Hide "Link" button
-      panel.style.display = ''; // Show panel immediately
       input.value = initialSearch;
-
-      // Auto-trigger search
-      setTimeout(async () => {
-        resultsList.innerHTML = '<div class="ss-entity-search-loading">Searching...</div>';
-        try {
-          const resp = await RecommendationsAPI.searchEntities(entityType, initialSearch, endpoint);
-          const results = resp.results || [];
-          if (results.length === 0) {
-            resultsList.innerHTML = '<div class="ss-entity-search-empty">No results</div>';
-            trigger.style.display = ''; // Show Link button as fallback
-            return;
-          }
-
-          function normalizeEndpoint(value) {
-            if (!value) return '';
-            let v = String(value).trim().toLowerCase().replace(/\/+$/, '');
-            if (v.startsWith('https://')) v = v.slice('https://'.length);
-            else if (v.startsWith('http://')) v = v.slice('http://'.length);
-            if (v.endsWith('/graphql')) v = v.slice(0, -'/graphql'.length);
-            return v;
-          }
-
-          function hasExactStashLink(result) {
-            const targetEndpoint = normalizeEndpoint(endpoint);
-            const targetStashId = String(stashboxId || '');
-            return (result.stash_ids || []).some(sid =>
-              normalizeEndpoint(sid.endpoint) === targetEndpoint &&
-              String(sid.stash_id || '') === targetStashId
-            );
-          }
-
-          function matchesInitialSearch(result) {
-            const needle = (initialSearch || '').trim().toLowerCase();
-            if (!needle) return false;
-            const name = String(result.name || '').trim().toLowerCase();
-            if (name === needle) return true;
-            const aliases = Array.isArray(result.aliases) ? result.aliases : [];
-            return aliases.some(a => String(a || '').trim().toLowerCase() === needle);
-          }
-
-          resultsList.innerHTML = '';
-          results.forEach(r => {
-            const item = document.createElement('div');
-            item.className = 'ss-entity-search-result-item';
-            if (r.linked) item.classList.add('ss-entity-already-linked');
-
-            let label = escapeHtml(r.name);
-            if (r.disambiguation) label += ` <span class="ss-entity-search-disambig">(${escapeHtml(r.disambiguation)})</span>`;
-            if (r.linked) label += ' <span class="ss-entity-search-linked-badge">linked</span>';
-
-            item.innerHTML = label;
-            item.addEventListener('click', async () => {
-              item.textContent = 'Linking...';
-              try {
-                await RecommendationsAPI.linkEntity(entityType, r.id, endpoint, stashboxId);
-                panel.style.display = 'none';
-                onMatch(r.id, r.name);
-              } catch (err) {
-                item.textContent = `Failed: ${err.message}`;
-              }
-            });
-            resultsList.appendChild(item);
-          });
-
-          // If exact stash-id link already exists, mark as matched immediately.
-          const exactLinked = results.find(r => matchesInitialSearch(r) && hasExactStashLink(r));
-          if (exactLinked) {
-            panel.style.display = 'none';
-            onMatch(exactLinked.id, exactLinked.name);
-            return;
-          }
-
-          // Pre-select if exactly one non-linked result with exact name/alias match
-          const nonLinkedMatches = results.filter(r => !r.linked && matchesInitialSearch(r));
-          if (nonLinkedMatches.length === 1) {
-            const r = nonLinkedMatches[0];
-            // Auto-link the exact match
-            try {
-              await RecommendationsAPI.linkEntity(entityType, r.id, endpoint, stashboxId);
-              panel.style.display = 'none';
-              onMatch(r.id, r.name);
-            } catch (err) {
-              // If auto-link fails, leave results visible for manual selection
-            }
-          }
-        } catch (err) {
-          resultsList.innerHTML = `<div class="ss-entity-search-empty">Error: ${escapeHtml(err.message)}</div>`;
-          trigger.style.display = ''; // Show Link button as fallback
-        }
-      }, 0);
     }
 
     let debounceTimer = null;
@@ -4776,6 +4684,11 @@
       panel.style.display = isOpen ? 'none' : '';
       if (!isOpen) {
         input.focus();
+        // If we already have a pre-filled query (e.g. performer name), run search immediately.
+        const q = input.value.trim();
+        if (q.length >= 2 && !resultsList.innerHTML.trim()) {
+          input.dispatchEvent(new Event('input'));
+        }
       }
     });
 
