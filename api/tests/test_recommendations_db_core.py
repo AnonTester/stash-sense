@@ -392,6 +392,178 @@ class TestDismissRecommendation:
         assert not db.is_permanently_dismissed("upstream", "performer", "42")
 
 
+# ==================== delete_pending_scene_fingerprint_for_scene ====================
+
+
+class TestDeletePendingSceneFingerprintForScene:
+    def test_deletes_only_pending_for_scene_prefix(self, db):
+        keep_resolved = _make_rec(
+            db,
+            type="scene_fingerprint_match",
+            target_type="scene",
+            target_id="42|https://stashdb.org/graphql|sb-a",
+            details={"local_scene_id": "42"},
+            confidence=0.8,
+        )
+        db.resolve_recommendation(keep_resolved, action="accepted")
+
+        delete_a = _make_rec(
+            db,
+            type="scene_fingerprint_match",
+            target_type="scene",
+            target_id="42|https://stashdb.org/graphql|sb-b",
+            details={"local_scene_id": "42"},
+            confidence=0.7,
+        )
+        delete_b = _make_rec(
+            db,
+            type="scene_fingerprint_match",
+            target_type="scene",
+            target_id="42|https://theporndb.net/graphql|tpdb-x",
+            details={"local_scene_id": "42"},
+            confidence=0.6,
+        )
+        keep_other_scene = _make_rec(
+            db,
+            type="scene_fingerprint_match",
+            target_type="scene",
+            target_id="43|https://stashdb.org/graphql|sb-c",
+            details={"local_scene_id": "43"},
+            confidence=0.9,
+        )
+        keep_other_type = _make_rec(
+            db,
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:43",
+            details={},
+            confidence=0.5,
+        )
+
+        deleted = db.delete_pending_scene_fingerprint_for_scene("42")
+        assert deleted == 2
+
+        assert db.get_recommendation(delete_a) is None
+        assert db.get_recommendation(delete_b) is None
+        assert db.get_recommendation(keep_resolved) is not None
+        assert db.get_recommendation(keep_other_scene) is not None
+        assert db.get_recommendation(keep_other_type) is not None
+
+    def test_respects_exclude_rec_id(self, db):
+        keep = _make_rec(
+            db,
+            type="scene_fingerprint_match",
+            target_type="scene",
+            target_id="42|https://stashdb.org/graphql|sb-keep",
+            details={"local_scene_id": "42"},
+            confidence=0.8,
+        )
+        delete_me = _make_rec(
+            db,
+            type="scene_fingerprint_match",
+            target_type="scene",
+            target_id="42|https://stashdb.org/graphql|sb-del",
+            details={"local_scene_id": "42"},
+            confidence=0.7,
+        )
+
+        deleted = db.delete_pending_scene_fingerprint_for_scene("42", exclude_rec_id=keep)
+        assert deleted == 1
+        assert db.get_recommendation(keep) is not None
+        assert db.get_recommendation(delete_me) is None
+
+
+# ==================== delete_pending_duplicate_scene_recommendations_for_scene ====================
+
+
+class TestDeletePendingDuplicateSceneRecommendationsForScene:
+    def test_deletes_duplicate_scene_types_for_scene(self, db):
+        delete_dup_pair_a = _make_rec(
+            db,
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={"scene_a_id": 42, "scene_b_id": 77},
+            confidence=0.91,
+        )
+        delete_dup_pair_b = _make_rec(
+            db,
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="13:42",
+            details={"scene_a_id": 13, "scene_b_id": 42},
+            confidence=0.81,
+        )
+        delete_dup_files = _make_rec(
+            db,
+            type="duplicate_scene_files",
+            target_type="scene",
+            target_id="42",
+            details={"scene_title": "Scene 42"},
+            confidence=1.0,
+        )
+
+        keep_other_pair = _make_rec(
+            db,
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="77:88",
+            details={"scene_a_id": 77, "scene_b_id": 88},
+            confidence=0.7,
+        )
+        keep_other_files = _make_rec(
+            db,
+            type="duplicate_scene_files",
+            target_type="scene",
+            target_id="99",
+            details={"scene_title": "Scene 99"},
+            confidence=1.0,
+        )
+        keep_other_type = _make_rec(
+            db,
+            type="scene_fingerprint_match",
+            target_type="scene",
+            target_id="42|https://stashdb.org/graphql|sb-1",
+            details={"local_scene_id": "42"},
+            confidence=0.5,
+        )
+
+        deleted = db.delete_pending_duplicate_scene_recommendations_for_scene("42")
+        assert deleted == 3
+
+        assert db.get_recommendation(delete_dup_pair_a) is None
+        assert db.get_recommendation(delete_dup_pair_b) is None
+        assert db.get_recommendation(delete_dup_files) is None
+        assert db.get_recommendation(keep_other_pair) is not None
+        assert db.get_recommendation(keep_other_files) is not None
+        assert db.get_recommendation(keep_other_type) is not None
+
+    def test_ignores_resolved_or_dismissed(self, db):
+        resolved_pair = _make_rec(
+            db,
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={"scene_a_id": 42, "scene_b_id": 77},
+            confidence=0.9,
+        )
+        dismissed_files = _make_rec(
+            db,
+            type="duplicate_scene_files",
+            target_type="scene",
+            target_id="42",
+            details={"scene_title": "Scene 42"},
+            confidence=1.0,
+        )
+        db.resolve_recommendation(resolved_pair, action="accepted")
+        db.dismiss_recommendation(dismissed_files, reason="test")
+
+        deleted = db.delete_pending_duplicate_scene_recommendations_for_scene("42")
+        assert deleted == 0
+        assert db.get_recommendation(resolved_pair) is not None
+        assert db.get_recommendation(dismissed_files) is not None
+
+
 # ==================== batch_dismiss_by_type ====================
 
 

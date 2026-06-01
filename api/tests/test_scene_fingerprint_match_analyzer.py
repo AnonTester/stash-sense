@@ -126,6 +126,7 @@ class TestAnalyzerRun:
 
         assert result.recommendations_created == 0
         mock_sbc.find_scenes_by_fingerprints.assert_not_called()
+        db.delete_pending_scene_fingerprint_for_scene.assert_called_once_with(scene_id="42")
 
     @pytest.mark.asyncio
     async def test_skips_scene_linked_to_different_endpoint(self):
@@ -151,6 +152,7 @@ class TestAnalyzerRun:
 
         assert result.recommendations_created == 0
         mock_sbc.find_scenes_by_fingerprints.assert_not_called()
+        db.delete_pending_scene_fingerprint_for_scene.assert_called_once_with(scene_id="42")
 
     @pytest.mark.asyncio
     async def test_skips_dismissed_pair(self):

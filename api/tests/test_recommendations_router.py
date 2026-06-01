@@ -1,7 +1,7 @@
 """Tests for the recommendations API router."""
 
 import pytest
-from unittest.mock import Mock
+from unittest.mock import Mock, AsyncMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -131,6 +131,49 @@ class TestListRecommendations:
         assert "confidence" in rec
         assert "created_at" in rec
         assert "updated_at" in rec
+
+    def test_scene_fingerprint_pending_removed_when_scene_already_linked(self, client, db):
+        rec_id = db.create_recommendation(
+            type="scene_fingerprint_match",
+            target_type="scene",
+            target_id="42|https://theporndb.net/graphql|remote-123",
+            details={},  # legacy rows may not include local_scene_id
+            confidence=0.66,
+        )
+        rec_mod.stash_client.get_scene_by_id = AsyncMock(return_value={
+            "id": "42",
+            "stash_ids": [{"endpoint": "https://stashdb.org/graphql", "stash_id": "already-linked"}],
+        })
+
+        resp = client.get(
+            "/recommendations",
+            params={"status": "pending", "type": "scene_fingerprint_match"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["recommendations"] == []
+        assert db.get_recommendation(rec_id) is None
+
+    def test_scene_fingerprint_pending_removed_when_scene_deleted(self, client, db):
+        rec_id = db.create_recommendation(
+            type="scene_fingerprint_match",
+            target_type="scene",
+            target_id="99|https://stashdb.org/graphql|remote-999",
+            details={"local_scene_id": "99"},
+            confidence=0.66,
+        )
+        rec_mod.stash_client.get_scene_by_id = AsyncMock(return_value=None)
+
+        resp = client.get(
+            "/recommendations",
+            params={"status": "pending", "type": "scene_fingerprint_match"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["recommendations"] == []
+        assert db.get_recommendation(rec_id) is None
 
 
 # ==================== GET /recommendations/counts ====================
@@ -343,3 +386,106 @@ class TestBatchDismiss:
         )
         assert resp.status_code == 200
         assert resp.json()["dismissed_count"] == 2
+
+
+class TestDeleteSceneAction:
+    """Test POST /recommendations/actions/delete-scene."""
+
+    def test_delete_scene_cleans_pending_scene_fingerprint_recommendations(self, client, db):
+        rec_id = db.create_recommendation(
+            type="scene_fingerprint_match",
+            target_type="scene",
+            target_id="42|https://stashdb.org/graphql|sb-uuid-1",
+            details={"local_scene_id": "42"},
+            confidence=0.75,
+        )
+        rec_mod.stash_client.destroy_scene = AsyncMock(return_value=True)
+
+        resp = client.post(
+            "/recommendations/actions/delete-scene",
+            json={"scene_id": "42", "delete_file": False},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        assert db.get_recommendation(rec_id) is None
+
+    def test_delete_scene_cleans_pending_duplicate_scene_recommendations(self, client, db):
+        dup_pair = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={"scene_a_id": 42, "scene_b_id": 77},
+            confidence=0.9,
+        )
+        dup_files = db.create_recommendation(
+            type="duplicate_scene_files",
+            target_type="scene",
+            target_id="42",
+            details={"scene_title": "Scene 42"},
+            confidence=1.0,
+        )
+        keep_other = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="77:88",
+            details={"scene_a_id": 77, "scene_b_id": 88},
+            confidence=0.8,
+        )
+        rec_mod.stash_client.destroy_scene = AsyncMock(return_value=True)
+
+        resp = client.post(
+            "/recommendations/actions/delete-scene",
+            json={"scene_id": "42", "delete_file": False},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        assert db.get_recommendation(dup_pair) is None
+        assert db.get_recommendation(dup_files) is None
+        assert db.get_recommendation(keep_other) is not None
+
+
+class TestMergeScenesAction:
+    """Test POST /recommendations/actions/merge-scenes."""
+
+    def test_merge_scenes_cleans_pending_duplicate_scene_recommendations(self, client, db):
+        dup_pair_a = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={"scene_a_id": 42, "scene_b_id": 77},
+            confidence=0.9,
+        )
+        dup_pair_b = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="21:42",
+            details={"scene_a_id": 21, "scene_b_id": 42},
+            confidence=0.8,
+        )
+        dup_files_dest = db.create_recommendation(
+            type="duplicate_scene_files",
+            target_type="scene",
+            target_id="77",
+            details={"scene_title": "Scene 77"},
+            confidence=1.0,
+        )
+        keep_other = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="99:100",
+            details={"scene_a_id": 99, "scene_b_id": 100},
+            confidence=0.7,
+        )
+
+        rec_mod.stash_client.merge_scenes = AsyncMock(return_value={"id": "77"})
+
+        resp = client.post(
+            "/recommendations/actions/merge-scenes",
+            json={"destination_id": "77", "source_ids": ["42"]},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        assert db.get_recommendation(dup_pair_a) is None
+        assert db.get_recommendation(dup_pair_b) is None
+        assert db.get_recommendation(dup_files_dest) is None
+        assert db.get_recommendation(keep_other) is not None

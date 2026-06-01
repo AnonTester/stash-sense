@@ -313,6 +313,27 @@ class FieldConfigResponse(BaseModel):
 
 # ==================== Recommendation Endpoints ====================
 
+def _extract_scene_fp_local_scene_id(rec) -> Optional[str]:
+    """Extract local scene ID from a scene_fingerprint_match recommendation."""
+    try:
+        details = rec.details or {}
+        scene_id = str(details.get("local_scene_id", "")).strip()
+        if scene_id:
+            return scene_id
+    except Exception:
+        pass
+
+    try:
+        target_id = str(rec.target_id or "")
+        if "|" in target_id:
+            scene_id = target_id.split("|", 1)[0].strip()
+            return scene_id or None
+    except Exception:
+        pass
+
+    return None
+
+
 @router.get("", response_model=RecommendationListResponse)
 async def list_recommendations(
     status: Optional[str] = None,
@@ -332,32 +353,28 @@ async def list_recommendations(
     )
 
     # Scene Stash-Box Tagger only applies to scenes without any stash_id.
-    # If stale pending recommendations exist for now-linked scenes, auto-dismiss
+    # If stale pending recommendations exist for now-linked/deleted scenes, auto-remove
     # them as part of list rendering so users don't see invalid entries.
     if status == "pending" and recs and (type is None or type == "scene_fingerprint_match"):
         stash = get_stash_client()
         scene_ids = {
-            str((r.details or {}).get("local_scene_id", "")).strip()
+            _extract_scene_fp_local_scene_id(r) or ""
             for r in recs
             if r.type == "scene_fingerprint_match"
         }
         scene_ids.discard("")
-        dismissed = 0
+        cleaned = 0
         for scene_id in scene_ids:
             try:
                 scene = await stash.get_scene_by_id(scene_id)
             except Exception:
                 continue
             if not scene:
+                cleaned += db.delete_pending_scene_fingerprint_for_scene(scene_id=scene_id)
                 continue
             if scene.get("stash_ids"):
-                dismissed += db.dismiss_pending_scene_fingerprint_for_scene(
-                    scene_id=scene_id,
-                    reason=(
-                        f"Auto-dismissed during list refresh: local scene {scene_id} already has stash_id link(s)"
-                    ),
-                )
-        if dismissed:
+                cleaned += db.delete_pending_scene_fingerprint_for_scene(scene_id=scene_id)
+        if cleaned:
             recs = db.get_recommendations(
                 status=status,
                 type=type,
@@ -621,8 +638,13 @@ class MergeScenesRequest(BaseModel):
 async def merge_scenes(request: MergeScenesRequest):
     """Execute a scene merge via Stash's sceneMerge mutation."""
     stash = get_stash_client()
+    db = get_rec_db()
     try:
         result = await stash.merge_scenes(request.source_ids, request.destination_id)
+        scene_ids_to_cleanup = [str(request.destination_id)] + [str(sid) for sid in (request.source_ids or [])]
+        for scene_id in scene_ids_to_cleanup:
+            db.delete_pending_duplicate_scene_recommendations_for_scene(scene_id=scene_id)
+            db.delete_pending_scene_fingerprint_for_scene(scene_id=scene_id)
         return {"success": True, "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -638,8 +660,13 @@ class DeleteSceneRequest(BaseModel):
 async def delete_scene(request: DeleteSceneRequest):
     """Delete a scene from Stash."""
     stash = get_stash_client()
+    db = get_rec_db()
     try:
         result = await stash.destroy_scene(request.scene_id, delete_file=request.delete_file)
+        if result:
+            scene_id = str(request.scene_id)
+            db.delete_pending_scene_fingerprint_for_scene(scene_id=scene_id)
+            db.delete_pending_duplicate_scene_recommendations_for_scene(scene_id=scene_id)
         return {"success": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

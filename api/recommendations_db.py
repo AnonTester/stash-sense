@@ -782,6 +782,85 @@ class RecommendationsDB:
 
             return len(rec_ids)
 
+    def delete_pending_scene_fingerprint_for_scene(
+        self,
+        scene_id: str,
+        exclude_rec_id: Optional[int] = None,
+    ) -> int:
+        """
+        Delete pending scene_fingerprint_match recommendations for one local scene.
+
+        Matches by target_id prefix: "<scene_id>|...".
+        Returns number of deleted recommendations.
+        """
+        scene_prefix = f"{str(scene_id)}|%"
+
+        with self._connection() as conn:
+            query = (
+                "DELETE FROM recommendations "
+                "WHERE type = 'scene_fingerprint_match' "
+                "AND target_type = 'scene' "
+                "AND status = 'pending' "
+                "AND target_id LIKE ?"
+            )
+            params: list[Any] = [scene_prefix]
+            if exclude_rec_id is not None:
+                query += " AND id != ?"
+                params.append(exclude_rec_id)
+
+            cursor = conn.execute(query, params)
+            return cursor.rowcount or 0
+
+    def delete_pending_duplicate_scene_recommendations_for_scene(
+        self,
+        scene_id: str,
+    ) -> int:
+        """
+        Delete pending duplicate-scene recommendations involving a local scene.
+
+        Covers:
+        - duplicate_scene_files where target_id == scene_id
+        - duplicate_scenes where target_id encodes "<scene_a_id>:<scene_b_id>"
+          and legacy/details-based rows via details.scene_a_id/scene_b_id
+        """
+        scene_id_str = str(scene_id).strip()
+        if not scene_id_str:
+            return 0
+
+        with self._connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM recommendations
+                WHERE status = 'pending'
+                  AND (
+                    (
+                      type = 'duplicate_scene_files'
+                      AND target_type = 'scene'
+                      AND target_id = ?
+                    )
+                    OR
+                    (
+                      type = 'duplicate_scenes'
+                      AND target_type = 'scene'
+                      AND (
+                        target_id LIKE ?
+                        OR target_id LIKE ?
+                        OR CAST(json_extract(details, '$.scene_a_id') AS TEXT) = ?
+                        OR CAST(json_extract(details, '$.scene_b_id') AS TEXT) = ?
+                      )
+                    )
+                  )
+                """,
+                (
+                    scene_id_str,
+                    f"{scene_id_str}:%",
+                    f"%:{scene_id_str}",
+                    scene_id_str,
+                    scene_id_str,
+                ),
+            )
+            return cursor.rowcount or 0
+
     def is_dismissed(self, type: str, target_type: str, target_id: str) -> bool:
         """Check if a target has been dismissed."""
         with self._connection() as conn:

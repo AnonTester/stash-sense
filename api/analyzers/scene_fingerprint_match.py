@@ -89,7 +89,7 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
         fetched_scenes = 0
         skipped_with_links = 0
         skipped_without_fingerprints = 0
-        stale_dismissed = 0
+        stale_deleted = 0
         linked_scene_ids: set[str] = set()
 
         while True:
@@ -142,23 +142,20 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
         # Clean up stale pending recommendations for scenes that are now linked.
         # This keeps Scene Stash-Box Tagger results limited to truly unlinked scenes.
         for linked_scene_id in linked_scene_ids:
-            stale_dismissed += self.rec_db.dismiss_pending_scene_fingerprint_for_scene(
-                scene_id=linked_scene_id,
-                reason=(
-                    f"Auto-dismissed: local scene {linked_scene_id} already has stash_id link(s)"
-                ),
+            stale_deleted += self.rec_db.delete_pending_scene_fingerprint_for_scene(
+                scene_id=linked_scene_id
             )
 
         logger.warning(
             "[%s] Scene fingerprint scan summary: fetched=%d, candidates=%d, "
-            "skipped_linked=%d, skipped_no_fingerprints=%d, stale_dismissed=%d, "
+            "skipped_linked=%d, skipped_no_fingerprints=%d, stale_deleted=%d, "
             "incremental=%s, watermark=%s",
             endpoint_name,
             fetched_scenes,
             len(scenes_needing_match),
             skipped_with_links,
             skipped_without_fingerprints,
-            stale_dismissed,
+            stale_deleted,
             incremental,
             watermark_ts or "-",
         )
