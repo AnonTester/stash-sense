@@ -227,6 +227,21 @@ class TestGetRecommendation:
         resp = client.get("/recommendations/99999")
         assert resp.status_code == 404
 
+    def test_scene_based_rec_deleted_when_referenced_scene_missing(self, client, db):
+        rec_id = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="101:202",
+            details={"scene_a_id": 101, "scene_b_id": 202},
+            confidence=0.9,
+        )
+        rec_mod.stash_client.get_scene_by_id = AsyncMock(side_effect=[None, {"id": "202"}])
+
+        resp = client.get(f"/recommendations/{rec_id}")
+        assert resp.status_code == 404
+        assert "referenced scene no longer exists" in str(resp.json().get("detail", "")).lower()
+        assert db.get_recommendation(rec_id) is None
+
 
 # ==================== POST /recommendations/{rec_id}/resolve ====================
 
@@ -489,6 +504,32 @@ class TestMergeScenesAction:
         assert db.get_recommendation(dup_pair_b) is None
         assert db.get_recommendation(dup_files_dest) is None
         assert db.get_recommendation(keep_other) is not None
+
+
+class TestUpdateSceneAction:
+    """Test POST /recommendations/actions/update-scene."""
+
+    def test_update_scene_missing_scene_removes_stale_upstream_rec(self, client, db):
+        rec_id = db.create_recommendation(
+            type="upstream_scene_changes",
+            target_type="scene",
+            target_id="26240",
+            details={"scene_id": "26240"},
+            confidence=1.0,
+        )
+        rec_mod.stash_client.update_scene = AsyncMock(
+            side_effect=RuntimeError(
+                "GraphQL error: [{'message': 'scene with id 26240 not found', 'path': ['sceneUpdate']}]"
+            )
+        )
+
+        resp = client.post(
+            "/recommendations/actions/update-scene",
+            json={"scene_id": "26240", "fields": {}},
+        )
+        assert resp.status_code == 404
+        assert "removed stale upstream scene recommendation" in str(resp.json().get("detail", "")).lower()
+        assert db.get_recommendation(rec_id) is None
 
 
 class TestSearchEntitiesAction:

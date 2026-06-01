@@ -3698,3 +3698,48 @@ a.ss-detail-entity-link:hover {
 .ss-detail-actions-center {
   justify-content: center;
 }
+
+/* Toast notifications */
+.ss-toast-container {
+  position: fixed;
+  top: 76px;
+  right: 16px;
+  z-index: 12000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.ss-toast {
+  min-width: 280px;
+  max-width: 460px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(24, 24, 24, 0.94);
+  color: var(--bs-body-color, #fff);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  line-height: 1.35;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.ss-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.ss-toast-info {
+  border-left: 3px solid #4dabf7;
+}
+
+.ss-toast-warning {
+  border-left: 3px solid #f59f00;
+}
+
+.ss-toast-error {
+  border-left: 3px solid #e03131;
+}

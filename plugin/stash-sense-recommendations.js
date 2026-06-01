@@ -1476,11 +1476,33 @@
   // ==================== Detail View ====================
 
   async function renderDetail(container) {
-    const rec = currentState.selectedRec;
+    let rec = currentState.selectedRec;
     if (!rec) {
       currentState.view = 'list';
       renderCurrentView(container);
       return;
+    }
+
+    // Refresh recommendation from backend on open so stale scene references
+    // can be pruned server-side after list load.
+    if (rec.id != null) {
+      try {
+        rec = await RecommendationsAPI.getOne(rec.id);
+        currentState.selectedRec = rec;
+      } catch (e) {
+        const msg = String(e?.message || e || '');
+        const stale = /recommendation not found|recommendation removed because referenced scene no longer exists/i.test(msg);
+        showToast(
+          stale
+            ? 'Recommendation removed because source/target scene no longer exists.'
+            : `Failed to open recommendation: ${msg}`,
+          stale ? 'warning' : 'error',
+        );
+        currentState.view = 'list';
+        currentState.selectedRec = null;
+        renderCurrentView(document.getElementById('ss-recommendations') || container);
+        return;
+      }
     }
 
     container.innerHTML = `
@@ -1882,6 +1904,10 @@
     var sceneTitles = {};
     sceneTitles[sceneAId] = sceneA?.title || 'Unknown Scene';
     sceneTitles[sceneBId] = sceneB?.title || 'Unknown Scene';
+    var isRecommendationNotFoundError = function(err) {
+      var msg = String(err?.message || err || '').toLowerCase();
+      return msg.indexOf('recommendation not found') !== -1;
+    };
 
     // Keep + Merge action (delegated)
     container.querySelectorAll('.ss-dup-keep-merge-btn').forEach(function(btn) {
@@ -1895,7 +1921,11 @@
               disableAllDupActions();
               btn.textContent = 'Merging...';
               await RecommendationsAPI.mergeScenes(keeperId, [sourceId]);
-              await RecommendationsAPI.resolve(rec.id, 'merged', { keeper_id: keeperId, source_id: sourceId });
+              try {
+                await RecommendationsAPI.resolve(rec.id, 'merged', { keeper_id: keeperId, source_id: sourceId });
+              } catch (resolveErr) {
+                if (!isRecommendationNotFoundError(resolveErr)) throw resolveErr;
+              }
               showSuccessAndReturn(btn, 'Merged!');
             } catch (e) {
               btn.textContent = 'Failed: ' + e.message;
@@ -1919,7 +1949,11 @@
               disableAllDupActions();
               btn.textContent = 'Deleting...';
               await RecommendationsAPI.deleteScene(deleteId, false);
-              await RecommendationsAPI.resolve(rec.id, 'deleted', { deleted_scene_id: deleteId, kept_scene_id: keepId });
+              try {
+                await RecommendationsAPI.resolve(rec.id, 'deleted', { deleted_scene_id: deleteId, kept_scene_id: keepId });
+              } catch (resolveErr) {
+                if (!isRecommendationNotFoundError(resolveErr)) throw resolveErr;
+              }
               showSuccessAndReturn(btn, 'Deleted!');
             } catch (e) {
               btn.textContent = 'Failed: ' + e.message;
@@ -2260,6 +2294,33 @@
       currentState.selectedRec = null;
       renderCurrentView(document.getElementById('ss-recommendations'));
     }, 1500);
+  }
+
+  function showToast(message, type = 'info', durationMs = 3200) {
+    const text = String(message || '').trim();
+    if (!text) return;
+
+    let container = document.getElementById('ss-toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'ss-toast-container';
+      container.className = 'ss-toast-container';
+      document.body.appendChild(container);
+    }
+
+    const toast = document.createElement('div');
+    toast.className = `ss-toast ss-toast-${type}`;
+    toast.textContent = text;
+    container.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('show'));
+
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => {
+        toast.remove();
+        if (!container.childElementCount) container.remove();
+      }, 220);
+    }, durationMs);
   }
 
 
@@ -4149,7 +4210,16 @@
           await RecommendationsAPI.resolve(rec.id, 'accepted_no_changes', {});
           showSuccessAndReturn(applyBtn, 'Done!');
         } catch (e) {
-          applyBtn.textContent = `Failed: ${e.message}`;
+          const msg = String(e?.message || e || '');
+          const stale = /recommendation not found|recommendation removed because referenced scene no longer exists/i.test(msg);
+          if (stale) {
+            showToast('Recommendation removed because source/target scene no longer exists.', 'warning');
+            currentState.view = 'list';
+            currentState.selectedRec = null;
+            renderCurrentView(document.getElementById('ss-recommendations') || container);
+            return;
+          }
+          applyBtn.textContent = `Failed: ${msg}`;
           applyBtn.disabled = false;
         }
         return;
@@ -4163,7 +4233,16 @@
 
         showSuccessAndReturn(applyBtn, 'Applied!');
       } catch (e) {
-        errorDiv.innerHTML = `<div>${escapeHtml(e.message)}</div>`;
+        const msg = String(e?.message || e || '');
+        const stale = /scene .*not found|removed stale upstream scene recommendation|recommendation removed because referenced scene no longer exists|recommendation not found/i.test(msg);
+        if (stale) {
+          showToast('Recommendation removed because source/target scene no longer exists.', 'warning');
+          currentState.view = 'list';
+          currentState.selectedRec = null;
+          renderCurrentView(document.getElementById('ss-recommendations') || container);
+          return;
+        }
+        errorDiv.innerHTML = `<div>${escapeHtml(msg)}</div>`;
         errorDiv.style.display = 'block';
         applyBtn.textContent = 'Apply Changes';
         applyBtn.disabled = false;

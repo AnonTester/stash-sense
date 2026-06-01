@@ -334,6 +334,92 @@ def _extract_scene_fp_local_scene_id(rec) -> Optional[str]:
     return None
 
 
+def _normalize_scene_id(value) -> Optional[str]:
+    """Normalize a scene ID candidate to non-empty string."""
+    if value is None:
+        return None
+    scene_id = str(value).strip()
+    return scene_id or None
+
+
+def _extract_scene_ids_from_recommendation(rec) -> list[str]:
+    """Extract referenced local scene IDs from a recommendation."""
+    details = rec.details or {}
+    scene_ids: list[str] = []
+
+    def add(value):
+        sid = _normalize_scene_id(value)
+        if sid:
+            scene_ids.append(sid)
+
+    rec_type = str(rec.type or "")
+    if rec_type == "duplicate_scenes":
+        add(details.get("scene_a_id"))
+        add(details.get("scene_b_id"))
+        target = str(rec.target_id or "")
+        if ":" in target:
+            left, right = target.split(":", 1)
+            add(left)
+            add(right)
+    elif rec_type == "duplicate_scene_files":
+        add(details.get("scene_id"))
+        add(rec.target_id)
+    elif rec_type == "upstream_scene_changes":
+        add(details.get("scene_id"))
+        add(rec.target_id)
+    elif rec_type == "scene_fingerprint_match":
+        add(_extract_scene_fp_local_scene_id(rec))
+    elif str(rec.target_type or "") == "scene":
+        add(rec.target_id)
+
+    # Stable dedupe preserving insertion order
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for sid in scene_ids:
+        if sid in seen:
+            continue
+        seen.add(sid)
+        deduped.append(sid)
+    return deduped
+
+
+async def _validate_and_prune_missing_scene_recommendation(rec, stash, db) -> list[str]:
+    """Delete recommendation if any referenced scene no longer exists.
+
+    Returns list of missing scene IDs. Empty list means all referenced scenes exist
+    (or recommendation has no scene references).
+    """
+    scene_ids = _extract_scene_ids_from_recommendation(rec)
+    if not scene_ids:
+        return []
+
+    missing_scene_ids: list[str] = []
+    for scene_id in scene_ids:
+        try:
+            scene = await stash.get_scene_by_id(scene_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed scene existence check for recommendation %s scene %s: %s",
+                rec.id,
+                scene_id,
+                exc,
+            )
+            continue
+        if not scene:
+            missing_scene_ids.append(scene_id)
+
+    if missing_scene_ids:
+        db.delete_recommendation(rec.id)
+        logger.info(
+            "Deleted stale recommendation %s (%s): missing scene(s) %s",
+            rec.id,
+            rec.type,
+            ", ".join(missing_scene_ids),
+        )
+
+    return missing_scene_ids
+
+
 @router.get("", response_model=RecommendationListResponse)
 async def list_recommendations(
     status: Optional[str] = None,
@@ -421,6 +507,21 @@ async def get_recommendation(rec_id: int):
     rec = db.get_recommendation(rec_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Recommendation not found")
+
+    # Guard detail views against stale scene references: if any source/target scene
+    # no longer exists, remove the recommendation and treat it as gone.
+    stash = get_stash_client()
+    missing_scene_ids = await _validate_and_prune_missing_scene_recommendation(rec, stash, db)
+    if missing_scene_ids:
+        missing_list = ", ".join(missing_scene_ids)
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Recommendation removed because referenced scene no longer exists: "
+                f"{missing_list}"
+            ),
+        )
+
     return RecommendationResponse(
         id=rec.id,
         type=rec.type,
@@ -1776,14 +1877,36 @@ async def link_entity_action(request: LinkEntityRequest):
 async def update_scene_fields(request: UpdateSceneRequest):
     """Apply selected upstream changes to a scene."""
     stash = get_stash_client()
-    result = await _apply_scene_update(
-        stash,
-        scene_id=request.scene_id,
-        fields=request.fields,
-        performer_ids=request.performer_ids,
-        tag_ids=request.tag_ids,
-        studio_id=request.studio_id,
-    )
+    try:
+        result = await _apply_scene_update(
+            stash,
+            scene_id=request.scene_id,
+            fields=request.fields,
+            performer_ids=request.performer_ids,
+            tag_ids=request.tag_ids,
+            studio_id=request.studio_id,
+        )
+    except RuntimeError as exc:
+        msg = str(exc)
+        lowered = msg.lower()
+        if "scene with id" in lowered and "not found" in lowered:
+            db = get_rec_db()
+            rec = db.get_recommendation_by_target(
+                "upstream_scene_changes",
+                "scene",
+                str(request.scene_id),
+                status="pending",
+            )
+            if rec:
+                db.delete_recommendation(rec.id)
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Scene {request.scene_id} not found. "
+                    "Removed stale upstream scene recommendation."
+                ),
+            ) from exc
+        raise
 
     # Resolve recommendation
     db = get_rec_db()

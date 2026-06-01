@@ -537,6 +537,15 @@ class RecommendationsDB:
                 return self._row_to_recommendation(row)
         return None
 
+    def delete_recommendation(self, rec_id: int) -> bool:
+        """Delete a recommendation by ID. Returns True if a row was deleted."""
+        with self._connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM recommendations WHERE id = ?",
+                (rec_id,),
+            )
+            return bool(cursor.rowcount)
+
     def get_recommendations(
         self,
         status: Optional[str] = None,
