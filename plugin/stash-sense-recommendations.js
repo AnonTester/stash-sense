@@ -181,6 +181,14 @@
       return apiCall('rec_search_entities', { entity_type: entityType, query, endpoint });
     },
 
+    async findLinkedEntity(entityType, endpoint, stashboxId) {
+      return apiCall('rec_find_linked_entity', {
+        entity_type: entityType,
+        endpoint,
+        stashbox_id: stashboxId,
+      });
+    },
+
     async linkEntity(entityType, entityId, endpoint, stashboxId) {
       return apiCall('rec_link_entity', { entity_type: entityType, entity_id: entityId, endpoint, stashbox_id: stashboxId });
     },
@@ -3508,6 +3516,23 @@
     const hasPerformers = performerChanges.added.length > 0 || performerChanges.removed.length > 0;
     const hasTags = tagChanges.added.length > 0 || tagChanges.removed.length > 0;
 
+    async function findLinkedByStashId(entityType, stashboxId) {
+      const key = `${endpoint}|${stashboxId}`;
+      const cachedId = entityCache.get(key);
+      if (cachedId) return { id: cachedId, name: null, from: 'cache' };
+      try {
+        const response = await RecommendationsAPI.findLinkedEntity(entityType, endpoint, stashboxId);
+        const linked = response?.result;
+        if (linked && linked.id != null) {
+          entityCache.set(key, linked.id);
+          return { id: linked.id, name: linked.name || null, from: 'stash_id' };
+        }
+      } catch (e) {
+        // Keep UI usable even if linked lookup fails.
+      }
+      return null;
+    }
+
     if (!hasSimple && !hasStudio && !hasPerformers && !hasTags) {
       try {
         await RecommendationsAPI.resolve(rec.id, 'accepted_no_changes', { note: 'All differences were cosmetic' });
@@ -3697,12 +3722,21 @@
       if (upstreamStudio) {
         const cacheKey = `${endpoint}|${upstreamStudio.id}`;
         const cachedId = entityCache.get(cacheKey);
+        const linkedByStashId = !upstreamStudio.local_match && !cachedId
+          ? await findLinkedByStashId('studio', upstreamStudio.id)
+          : null;
 
         if (upstreamStudio.local_match) {
           entityCache.set(cacheKey, upstreamStudio.local_match.id);
           const note = document.createElement('span');
           note.className = 'ss-scene-entity-linked';
           note.textContent = 'Linked';
+          studioRow.appendChild(note);
+        } else if (linkedByStashId?.id) {
+          studioCheckbox.checked = true;
+          const note = document.createElement('span');
+          note.className = 'ss-scene-entity-linked';
+          note.textContent = linkedByStashId.name ? `Linked: ${linkedByStashId.name}` : 'Linked';
           studioRow.appendChild(note);
         } else if (cachedId) {
           const note = document.createElement('span');
@@ -3771,7 +3805,7 @@
         addedLabel.textContent = `+ ${performerChanges.added.length} to add`;
         addedDiv.appendChild(addedLabel);
 
-        performerChanges.added.forEach(perf => {
+        for (const perf of performerChanges.added) {
           const row = document.createElement('div');
           row.className = 'ss-scene-entity-item';
           row.dataset.stashboxId = perf.id;
@@ -3795,6 +3829,9 @@
 
           const cacheKey = `${endpoint}|${perf.id}`;
           const cachedId = entityCache.get(cacheKey);
+          const linkedByStashId = !perf.local_match && !cachedId
+            ? await findLinkedByStashId('performer', perf.id)
+            : null;
 
           // Auto-match: local entity found by name during analysis
           if (perf.local_match) {
@@ -3803,6 +3840,12 @@
             const note = document.createElement('span');
             note.className = 'ss-scene-entity-linked';
             note.textContent = 'Linked';
+            row.appendChild(note);
+          } else if (linkedByStashId?.id) {
+            cb.checked = true;
+            const note = document.createElement('span');
+            note.className = 'ss-scene-entity-linked';
+            note.textContent = linkedByStashId.name ? `Linked: ${linkedByStashId.name}` : 'Linked';
             row.appendChild(note);
           } else if (cachedId) {
             cb.checked = true;
@@ -3861,7 +3904,7 @@
           }
 
           addedDiv.appendChild(row);
-        });
+        }
         perfSection.appendChild(addedDiv);
       }
 
@@ -3928,13 +3971,16 @@
         const tagList = document.createElement('div');
         tagList.className = 'ss-scene-tag-list';
 
-        tagChanges.added.forEach(tag => {
+        for (const tag of tagChanges.added) {
           const chip = document.createElement('div');
           chip.className = 'ss-scene-tag-chip';
           chip.dataset.stashboxId = tag.id;
 
           const cacheKey = `${endpoint}|${tag.id}`;
           const cachedId = entityCache.get(cacheKey);
+          const linkedByStashId = !tag.local_match && !cachedId
+            ? await findLinkedByStashId('tag', tag.id)
+            : null;
 
           const cb = document.createElement('input');
           cb.type = 'checkbox';
@@ -3954,6 +4000,12 @@
             const note = document.createElement('span');
             note.className = 'ss-scene-entity-linked';
             note.textContent = 'Linked';
+            chip.appendChild(note);
+          } else if (linkedByStashId?.id) {
+            cb.checked = true;
+            const note = document.createElement('span');
+            note.className = 'ss-scene-entity-linked';
+            note.textContent = linkedByStashId.name ? `Linked: ${linkedByStashId.name}` : 'Linked';
             chip.appendChild(note);
           } else if (cachedId) {
             cb.checked = true;
@@ -4002,7 +4054,7 @@
           }
 
           tagList.appendChild(chip);
-        });
+        }
         addedDiv.appendChild(tagList);
         tagSection.appendChild(addedDiv);
       }

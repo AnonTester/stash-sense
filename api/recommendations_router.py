@@ -1413,6 +1413,13 @@ class SearchEntitiesRequest(BaseModel):
     endpoint: str  # stash-box endpoint (to check if already linked)
 
 
+class FindLinkedEntityRequest(BaseModel):
+    """Request to find local entity linked to a stash-box endpoint+ID."""
+    entity_type: str  # "performer", "tag", "studio"
+    endpoint: str
+    stashbox_id: str
+
+
 class LinkEntityRequest(BaseModel):
     """Request to link a local entity to a stash-box ID."""
     entity_type: str  # "performer", "tag", "studio"
@@ -1546,6 +1553,112 @@ async def _link_existing_performer_by_name_or_alias(
         return {"id": match["id"], "name": match.get("name")}
 
     return None
+
+
+async def _find_linked_entity_by_stash_id(
+    stash,
+    entity_type: str,
+    endpoint: str,
+    stashbox_id: str,
+) -> Optional[dict]:
+    """Find a local entity already linked to endpoint+stashbox_id."""
+    endpoint = str(endpoint or "").strip()
+    stashbox_id = str(stashbox_id or "").strip()
+    if not endpoint or not stashbox_id:
+        return None
+
+    stash_filter = {
+        "stash_id_endpoint": {
+            "endpoint": endpoint,
+            "stash_id": stashbox_id,
+            "modifier": "EQUALS",
+        }
+    }
+
+    if entity_type == "performer":
+        data = await stash._execute(
+            """
+            query FindLinkedPerformer($performer_filter: PerformerFilterType) {
+              findPerformers(performer_filter: $performer_filter, filter: { per_page: 1 }) {
+                performers {
+                  id
+                  name
+                  disambiguation
+                  alias_list
+                  stash_ids { endpoint stash_id }
+                }
+              }
+            }
+            """,
+            {"performer_filter": stash_filter},
+        )
+        rows = (data.get("findPerformers") or {}).get("performers") or []
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "id": row.get("id"),
+            "name": row.get("name"),
+            "disambiguation": row.get("disambiguation"),
+            "aliases": row.get("alias_list") or [],
+            "stash_ids": row.get("stash_ids") or [],
+        }
+
+    if entity_type == "tag":
+        data = await stash._execute(
+            """
+            query FindLinkedTag($tag_filter: TagFilterType) {
+              findTags(tag_filter: $tag_filter, filter: { per_page: 1 }) {
+                tags {
+                  id
+                  name
+                  aliases
+                  stash_ids { endpoint stash_id }
+                }
+              }
+            }
+            """,
+            {"tag_filter": stash_filter},
+        )
+        rows = (data.get("findTags") or {}).get("tags") or []
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "id": row.get("id"),
+            "name": row.get("name"),
+            "aliases": row.get("aliases") or [],
+            "stash_ids": row.get("stash_ids") or [],
+        }
+
+    if entity_type == "studio":
+        data = await stash._execute(
+            """
+            query FindLinkedStudio($studio_filter: StudioFilterType) {
+              findStudios(studio_filter: $studio_filter, filter: { per_page: 1 }) {
+                studios {
+                  id
+                  name
+                  aliases
+                  stash_ids { endpoint stash_id }
+                }
+              }
+            }
+            """,
+            {"studio_filter": stash_filter},
+        )
+        rows = (data.get("findStudios") or {}).get("studios") or []
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "id": row.get("id"),
+            "name": row.get("name"),
+            "aliases": row.get("aliases") or [],
+            "stash_ids": row.get("stash_ids") or [],
+        }
+
+    raise HTTPException(status_code=400, detail=f"Unknown entity type: {entity_type}")
 
 
 def _tag_matches_name_or_alias(tag: dict, expected_name: str) -> bool:
@@ -1817,6 +1930,19 @@ async def search_entities_action(request: SearchEntitiesRequest):
         }
     else:
         raise HTTPException(status_code=400, detail=f"Unknown entity type: {request.entity_type}")
+
+
+@router.post("/actions/find-linked-entity")
+async def find_linked_entity_action(request: FindLinkedEntityRequest):
+    """Find a local entity that is already linked to endpoint+stashbox_id."""
+    stash = get_stash_client()
+    result = await _find_linked_entity_by_stash_id(
+        stash=stash,
+        entity_type=request.entity_type,
+        endpoint=request.endpoint,
+        stashbox_id=request.stashbox_id,
+    )
+    return {"result": result}
 
 
 @router.post("/actions/link-entity")

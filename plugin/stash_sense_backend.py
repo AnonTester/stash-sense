@@ -664,6 +664,13 @@ def handle_recommendations(mode, args, sidecar_url):
             "endpoint": args.get("endpoint", ""),
         })
 
+    elif mode == "rec_find_linked_entity":
+        return sidecar_post(sidecar_url, "/recommendations/actions/find-linked-entity", {
+            "entity_type": args.get("entity_type", ""),
+            "endpoint": args.get("endpoint", ""),
+            "stashbox_id": args.get("stashbox_id", ""),
+        })
+
     elif mode == "rec_link_entity":
         entity_type = args.get("entity_type", "")
         entity_id = args.get("entity_id", "")

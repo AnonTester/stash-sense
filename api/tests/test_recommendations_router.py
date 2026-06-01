@@ -562,3 +562,36 @@ class TestSearchEntitiesAction:
         assert len(data["results"]) == 1
         assert data["results"][0]["aliases"] == ["JD", "Jane D"]
         assert data["results"][0]["linked"] is True
+
+
+class TestFindLinkedEntityAction:
+    """Test POST /recommendations/actions/find-linked-entity."""
+
+    def test_find_linked_performer_by_stash_id(self, client):
+        rec_mod.stash_client._execute = AsyncMock(return_value={
+            "findPerformers": {
+                "performers": [
+                    {
+                        "id": "11",
+                        "name": "Jane Doe",
+                        "disambiguation": "Performer",
+                        "alias_list": ["JD"],
+                        "stash_ids": [{"endpoint": "https://stashdb.org/graphql", "stash_id": "perf-1"}],
+                    }
+                ]
+            }
+        })
+
+        resp = client.post(
+            "/recommendations/actions/find-linked-entity",
+            json={
+                "entity_type": "performer",
+                "endpoint": "https://stashdb.org/graphql",
+                "stashbox_id": "perf-1",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["result"]["id"] == "11"
+        assert data["result"]["name"] == "Jane Doe"
+        assert data["result"]["aliases"] == ["JD"]

@@ -3304,6 +3304,11 @@ a.ss-upstream-endpoint-badge:hover {
 .ss-scene-entity-item .ss-btn + .ss-entity-search-dropdown {
   margin-left: 4px;
 }
+.ss-scene-entity-row .ss-btn + .ss-btn,
+.ss-scene-entity-row .ss-entity-search-dropdown + .ss-btn,
+.ss-scene-entity-row .ss-btn + .ss-entity-search-dropdown {
+  margin-left: 4px;
+}
 .ss-scene-entity-item.ss-scene-entity-removed { opacity: 0.6; text-decoration: line-through; }
 .ss-scene-entity-name { font-size: 13px; }
 .ss-scene-entity-created { font-size: 11px; color: #4caf50; }
