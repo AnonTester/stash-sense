@@ -3689,7 +3689,7 @@
 
       const studioRow = document.createElement('div');
       studioRow.className = 'ss-scene-entity-row';
-      const localStudio = studioChange.local;
+      const localStudio = studioChange.local || details.current_studio;
       const upstreamStudio = studioChange.upstream;
       studioRow.innerHTML = `
         <div class="ss-scene-entity-compare">

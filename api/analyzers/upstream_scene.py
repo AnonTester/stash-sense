@@ -510,6 +510,8 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
                     tag["local_match"] = {"id": match_id}
 
         sc = details.get("studio_change")
+        if sc and not sc.get("local") and current_studio:
+            sc["local"] = current_studio
         if sc and sc.get("upstream") and self._studio_name_lookup:
             upstream_studio = sc["upstream"]
             match_id = self._studio_name_lookup.get(

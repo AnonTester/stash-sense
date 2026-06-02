@@ -974,6 +974,68 @@ class TestUpstreamSceneAnalyzer:
         assert len(recs) == 0
 
     @pytest.mark.asyncio
+    async def test_studio_change_details_preserve_current_local_studio(self, rec_db):
+        """Scene recommendations keep the assigned local studio for detail rendering."""
+        stash = MagicMock()
+        stash.get_stashbox_connections = AsyncMock(return_value=[
+            {"endpoint": "https://stashdb.org/graphql", "api_key": "key"},
+        ])
+        stash.get_scenes_for_endpoint = AsyncMock(return_value=[
+            {
+                "id": "1",
+                "title": "Local Title",
+                "date": "2025-01-01",
+                "details": "",
+                "director": "",
+                "code": "",
+                "urls": [],
+                "studio": {
+                    "id": "10",
+                    "name": "Local Studio",
+                    "stash_ids": [],
+                },
+                "performers": [],
+                "tags": [],
+                "stash_ids": [
+                    {"endpoint": "https://stashdb.org/graphql", "stash_id": "scene-sb-1"}
+                ],
+            }
+        ])
+        stash.get_all_performers = AsyncMock(return_value=[])
+        stash.get_all_tags = AsyncMock(return_value=[])
+        stash.get_all_studios = AsyncMock(return_value=[])
+
+        upstream_data = {
+            "title": "Local Title",
+            "details": "",
+            "date": "2025-01-01",
+            "director": "",
+            "code": "",
+            "urls": [],
+            "studio": {"id": "studio-sb-1", "name": "Upstream Studio"},
+            "performers": [],
+            "tags": [],
+            "deleted": False,
+            "updated": "2025-01-15T00:00:00Z",
+        }
+
+        with patch("stashbox_client.StashBoxClient") as MockSBC:
+            mock_sbc = MagicMock()
+            mock_sbc.get_scene = AsyncMock(return_value=upstream_data)
+            MockSBC.return_value = mock_sbc
+
+            from analyzers.upstream_scene import UpstreamSceneAnalyzer
+            analyzer = UpstreamSceneAnalyzer(stash, rec_db)
+            await analyzer.run()
+
+        recs = rec_db.get_recommendations(type="upstream_scene_changes", status="pending")
+        assert len(recs) == 1
+        details = recs[0].details
+        assert details["current_studio"] == {"id": "10", "name": "Local Studio"}
+        assert details["studio_change"]["local"] == {"id": "10", "name": "Local Studio"}
+        assert details["studio_change"]["upstream"] == {"id": "studio-sb-1", "name": "Upstream Studio"}
+
+    @pytest.mark.asyncio
     async def test_pending_scene_rec_rechecked_when_upstream_not_updated(self, rec_db):
         """Pending rec is re-compared in incremental mode and auto-resolved after local fix."""
         stash = MagicMock()
