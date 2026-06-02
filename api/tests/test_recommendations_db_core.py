@@ -240,6 +240,22 @@ class TestGetRecommendations:
         dismissed = db.get_recommendations(type="duplicate_scenes", status="dismissed")
         assert [r.target_id for r in dismissed] == ["d_high", "d_mid", "d_low"]
 
+    def test_add_recommendation_target_dismissal_preserves_status(self, db):
+        rec_id = _make_rec(
+            db,
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={"scene_a_id": 42, "scene_b_id": 77},
+            confidence=0.9,
+        )
+
+        assert db.add_recommendation_target_dismissal(rec_id, reason="grouped review") is True
+
+        rec = db.get_recommendation(rec_id)
+        assert rec.status == "pending"
+        assert db.is_dismissed("duplicate_scenes", "scene", "42:77") is True
+
     def test_scene_fingerprint_match_ordered_by_confidence_desc_per_status_group(self, db):
         # pending
         _make_rec(db, type="scene_fingerprint_match", target_type="scene", target_id="p_low", confidence=0.40)

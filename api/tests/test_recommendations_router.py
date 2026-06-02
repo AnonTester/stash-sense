@@ -175,6 +175,57 @@ class TestListRecommendations:
         assert data["recommendations"] == []
         assert db.get_recommendation(rec_id) is None
 
+    def test_duplicate_scenes_are_grouped_and_sorted_by_top_confidence(self, client, db):
+        db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={
+                "scene_a_id": 42,
+                "scene_b_id": 77,
+                "confidence": 80,
+                "scene_a_summary": {"title": "Source 42"},
+                "scene_b_summary": {"title": "Match 77"},
+            },
+            confidence=0.80,
+        )
+        db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:88",
+            details={
+                "scene_a_id": 42,
+                "scene_b_id": 88,
+                "confidence": 95,
+                "scene_a_summary": {"title": "Source 42"},
+                "scene_b_summary": {"title": "Match 88"},
+            },
+            confidence=0.95,
+        )
+        db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="13:17",
+            details={
+                "scene_a_id": 13,
+                "scene_b_id": 17,
+                "confidence": 90,
+                "scene_a_summary": {"title": "Source 13"},
+                "scene_b_summary": {"title": "Match 17"},
+            },
+            confidence=0.90,
+        )
+
+        resp = client.get("/recommendations", params={"type": "duplicate_scenes", "status": "pending"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 2
+        assert len(data["recommendations"]) == 2
+        assert data["recommendations"][0]["details"]["source_scene_id"] == "42"
+        assert data["recommendations"][0]["details"]["match_count"] == 2
+        assert data["recommendations"][0]["confidence"] == pytest.approx(0.95)
+        assert data["recommendations"][1]["details"]["source_scene_id"] == "13"
+
 
 # ==================== GET /recommendations/counts ====================
 
@@ -205,6 +256,34 @@ class TestRecommendationCounts:
         data = resp.json()
         assert data["counts"]["duplicate_performer"]["pending"] == 2
         assert data["counts"]["duplicate_performer"]["dismissed"] == 1
+        assert data["total_pending"] == 2
+
+    def test_duplicate_scene_counts_use_grouped_sources(self, client, db):
+        db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={"scene_a_id": 42, "scene_b_id": 77, "confidence": 80},
+            confidence=0.80,
+        )
+        db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:88",
+            details={"scene_a_id": 42, "scene_b_id": 88, "confidence": 95},
+            confidence=0.95,
+        )
+        db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="13:17",
+            details={"scene_a_id": 13, "scene_b_id": 17, "confidence": 90},
+            confidence=0.90,
+        )
+
+        resp = client.get("/recommendations/counts")
+        data = resp.json()
+        assert data["counts"]["duplicate_scenes"]["pending"] == 2
         assert data["total_pending"] == 2
 
 
@@ -241,6 +320,86 @@ class TestGetRecommendation:
         assert resp.status_code == 404
         assert "referenced scene no longer exists" in str(resp.json().get("detail", "")).lower()
         assert db.get_recommendation(rec_id) is None
+
+    def test_duplicate_scene_get_returns_grouped_details(self, client, db):
+        first_id = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={
+                "scene_a_id": 42,
+                "scene_b_id": 77,
+                "confidence": 80,
+                "scene_a_summary": {"title": "Source 42"},
+                "scene_b_summary": {"title": "Match 77"},
+                "reasoning": ["Likely duplicate"],
+            },
+            confidence=0.80,
+        )
+        db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:88",
+            details={
+                "scene_a_id": 42,
+                "scene_b_id": 88,
+                "confidence": 95,
+                "scene_a_summary": {"title": "Source 42"},
+                "scene_b_summary": {"title": "Match 88"},
+                "reasoning": ["High confidence duplicate"],
+            },
+            confidence=0.95,
+        )
+        rec_mod.stash_client.get_scene_by_id = AsyncMock(side_effect=lambda scene_id: {"id": str(scene_id)})
+
+        resp = client.get(f"/recommendations/{first_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["details"]["grouped"] is True
+        assert data["details"]["source_scene_id"] == "42"
+        assert len(data["details"]["duplicate_matches"]) == 2
+        assert data["details"]["duplicate_matches"][0]["match_scene_id"] == "88"
+        assert data["confidence"] == pytest.approx(0.95)
+
+    def test_duplicate_scene_get_prunes_stale_sibling_matches(self, client, db):
+        valid_id = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:88",
+            details={
+                "scene_a_id": 42,
+                "scene_b_id": 88,
+                "confidence": 95,
+                "scene_a_summary": {"title": "Source 42"},
+                "scene_b_summary": {"title": "Match 88"},
+            },
+            confidence=0.95,
+        )
+        stale_id = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={
+                "scene_a_id": 42,
+                "scene_b_id": 77,
+                "confidence": 80,
+                "scene_a_summary": {"title": "Source 42"},
+                "scene_b_summary": {"title": "Match 77"},
+            },
+            confidence=0.80,
+        )
+        rec_mod.stash_client.get_scene_by_id = AsyncMock(
+            side_effect=lambda scene_id: None if str(scene_id) == "77" else {"id": str(scene_id)}
+        )
+
+        resp = client.get(f"/recommendations/{valid_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["details"]["source_scene_id"] == "42"
+        assert len(data["details"]["duplicate_matches"]) == 1
+        assert data["details"]["duplicate_matches"][0]["match_scene_id"] == "88"
+        assert db.get_recommendation(valid_id) is not None
+        assert db.get_recommendation(stale_id) is None
 
 
 # ==================== POST /recommendations/{rec_id}/resolve ====================
@@ -504,6 +663,172 @@ class TestMergeScenesAction:
         assert db.get_recommendation(dup_pair_b) is None
         assert db.get_recommendation(dup_files_dest) is None
         assert db.get_recommendation(keep_other) is not None
+
+    def test_merge_duplicate_scene_group_resolves_selected_and_blocks_unselected(self, client, db):
+        rec_keep_77 = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={"scene_a_id": 42, "scene_b_id": 77, "confidence": 90},
+            confidence=0.9,
+        )
+        rec_keep_88 = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:88",
+            details={"scene_a_id": 42, "scene_b_id": 88, "confidence": 80},
+            confidence=0.8,
+        )
+        rec_skip_99 = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:99",
+            details={"scene_a_id": 42, "scene_b_id": 99, "confidence": 70},
+            confidence=0.7,
+        )
+        rec_mod.stash_client.merge_scenes = AsyncMock(return_value={"id": "42"})
+
+        resp = client.post(
+            "/recommendations/actions/merge-duplicate-scene-group",
+            json={
+                "source_scene_id": "42",
+                "selected_match_scene_ids": ["77", "88"],
+                "selected_recommendation_ids": [rec_keep_77, rec_keep_88],
+                "unselected_recommendation_ids": [rec_skip_99],
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        rec_mod.stash_client.merge_scenes.assert_awaited_once_with(["77", "88"], "42")
+
+        assert db.get_recommendation(rec_keep_77).status == "resolved"
+        assert db.get_recommendation(rec_keep_88).status == "resolved"
+        assert db.get_recommendation(rec_skip_99).status == "resolved"
+        assert db.is_dismissed("duplicate_scenes", "scene", "42:99") is True
+
+
+class TestDuplicateSceneGroupActions:
+    def test_delete_duplicate_scene_match_resolves_after_successful_delete(self, client, db):
+        rec_id = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={"scene_a_id": 42, "scene_b_id": 77},
+            confidence=0.9,
+        )
+        dup_files_match = db.create_recommendation(
+            type="duplicate_scene_files",
+            target_type="scene",
+            target_id="77",
+            details={"scene_title": "Scene 77"},
+            confidence=1.0,
+        )
+        rec_mod.stash_client.destroy_scene = AsyncMock(return_value=True)
+
+        resp = client.post(
+            "/recommendations/actions/delete-duplicate-scene-match",
+            json={
+                "source_scene_id": "42",
+                "match_scene_id": "77",
+                "recommendation_id": rec_id,
+                "delete_file": False,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        rec = db.get_recommendation(rec_id)
+        assert rec is not None
+        assert rec.status == "resolved"
+        assert rec.resolution_action == "deleted_match"
+        assert db.get_recommendation(dup_files_match) is None
+
+    def test_merge_source_into_duplicate_scene_match_resolves_keeper_and_siblings(self, client, db):
+        keeper_rec = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={"scene_a_id": 42, "scene_b_id": 77},
+            confidence=0.9,
+        )
+        sibling_rec = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:88",
+            details={"scene_a_id": 42, "scene_b_id": 88},
+            confidence=0.8,
+        )
+        rec_mod.stash_client.merge_scenes = AsyncMock(return_value={"id": "77"})
+        rec_mod.stash_client.destroy_scene = AsyncMock(return_value=True)
+
+        resp = client.post(
+            "/recommendations/actions/merge-source-into-duplicate-scene-match",
+            json={
+                "source_scene_id": "42",
+                "keeper_match_scene_id": "77",
+                "keeper_recommendation_id": keeper_rec,
+                "other_matches": [
+                    {"recommendation_id": sibling_rec, "scene_id": "88"},
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        rec_mod.stash_client.merge_scenes.assert_awaited_once_with(["42"], "77")
+        rec_mod.stash_client.destroy_scene.assert_awaited_once_with("88", delete_file=False)
+        assert db.get_recommendation(keeper_rec).status == "resolved"
+        assert db.get_recommendation(keeper_rec).resolution_action == "merged_source_into_match"
+        assert db.get_recommendation(sibling_rec).status == "resolved"
+
+    def test_delete_duplicate_scene_group_resolves_all_matches(self, client, db):
+        rec_a = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={"scene_a_id": 42, "scene_b_id": 77},
+            confidence=0.9,
+        )
+        rec_b = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:88",
+            details={"scene_a_id": 42, "scene_b_id": 88},
+            confidence=0.8,
+        )
+        rec_mod.stash_client.destroy_scene = AsyncMock(return_value=True)
+
+        resp = client.post(
+            "/recommendations/actions/delete-duplicate-scene-group",
+            json={"source_scene_id": "42", "recommendation_ids": [rec_a, rec_b], "delete_file": False},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        assert db.get_recommendation(rec_a).status == "resolved"
+        assert db.get_recommendation(rec_b).status == "resolved"
+
+    def test_dismiss_duplicate_scene_group_dismisses_all(self, client, db):
+        rec_a = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:77",
+            details={"scene_a_id": 42, "scene_b_id": 77},
+            confidence=0.9,
+        )
+        rec_b = db.create_recommendation(
+            type="duplicate_scenes",
+            target_type="scene",
+            target_id="42:88",
+            details={"scene_a_id": 42, "scene_b_id": 88},
+            confidence=0.8,
+        )
+
+        resp = client.post(
+            "/recommendations/actions/dismiss-duplicate-scene-group",
+            json={"recommendation_ids": [rec_a, rec_b], "reason": "Not duplicates"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["dismissed_count"] == 2
+        assert db.get_recommendation(rec_a).status == "dismissed"
+        assert db.get_recommendation(rec_b).status == "dismissed"
 
 
 class TestUpdateSceneAction:

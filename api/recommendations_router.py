@@ -4,15 +4,16 @@ Recommendations API Router
 Endpoints for managing recommendations, running analysis, and configuration.
 """
 
+from copy import deepcopy
 import logging
-from typing import Optional
+from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 import face_config
-from recommendations_db import RecommendationsDB
+from recommendations_db import Recommendation, RecommendationsDB
 from stash_client_unified import StashClientUnified
 from analyzers import DuplicatePerformerAnalyzer, DuplicateSceneFilesAnalyzer, DuplicateScenesAnalyzer, UpstreamPerformerAnalyzer, UpstreamTagAnalyzer, UpstreamStudioAnalyzer, UpstreamSceneAnalyzer
 from analyzers.scene_fingerprint_match import SceneFingerprintMatchAnalyzer
@@ -224,6 +225,49 @@ class DismissRequest(BaseModel):
     reason: Optional[str] = Field(None, description="Why this was dismissed")
 
 
+class MergeDuplicateSceneGroupRequest(BaseModel):
+    """Merge selected duplicate-scene matches into the source scene."""
+    source_scene_id: str
+    selected_match_scene_ids: list[str]
+    selected_recommendation_ids: list[int]
+    unselected_recommendation_ids: list[int] = Field(default_factory=list)
+
+
+class DeleteDuplicateSceneGroupRequest(BaseModel):
+    """Delete the source scene for a grouped duplicate-scene review."""
+    source_scene_id: str
+    recommendation_ids: list[int]
+    delete_file: bool = False
+
+
+class DismissDuplicateSceneGroupRequest(BaseModel):
+    """Dismiss all raw duplicate-scene recommendations in a grouped review."""
+    recommendation_ids: list[int]
+    reason: Optional[str] = None
+
+
+class DeleteDuplicateSceneMatchRequest(BaseModel):
+    """Delete one matched scene from a grouped duplicate-scene review."""
+    source_scene_id: str
+    match_scene_id: str
+    recommendation_id: int
+    delete_file: bool = False
+
+
+class DuplicateSceneMatchCleanupItem(BaseModel):
+    """One matched scene to clean up after a source->match merge."""
+    recommendation_id: int
+    scene_id: str
+
+
+class MergeSourceIntoDuplicateSceneMatchRequest(BaseModel):
+    """Merge the grouped source scene into one matched scene."""
+    source_scene_id: str
+    keeper_match_scene_id: str
+    keeper_recommendation_id: int
+    other_matches: list[DuplicateSceneMatchCleanupItem] = Field(default_factory=list)
+
+
 class AnalysisRunResponse(BaseModel):
     """An analysis run."""
     id: int
@@ -383,6 +427,208 @@ def _extract_scene_ids_from_recommendation(rec) -> list[str]:
     return deduped
 
 
+def _parse_duplicate_scene_confidence_percent(rec: Recommendation) -> float:
+    """Normalize duplicate-scene confidence to a 0-100 percentage."""
+    details = rec.details or {}
+    raw = details.get("top_confidence", details.get("confidence", rec.confidence))
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError):
+        numeric = 0.0
+    if numeric <= 1:
+        numeric *= 100.0
+    return max(0.0, numeric)
+
+
+def _extract_duplicate_scene_source_id(rec: Recommendation) -> Optional[str]:
+    """Get the source/left-hand scene ID for a duplicate-scenes recommendation."""
+    details = rec.details or {}
+    source_id = _normalize_scene_id(details.get("source_scene_id"))
+    if source_id:
+        return source_id
+    source_id = _normalize_scene_id(details.get("scene_a_id"))
+    if source_id:
+        return source_id
+    target = str(rec.target_id or "")
+    if ":" in target:
+        left, _ = target.split(":", 1)
+        return _normalize_scene_id(left)
+    return None
+
+
+def _extract_duplicate_scene_match_id(rec: Recommendation) -> Optional[str]:
+    """Get the matched/right-hand scene ID for a duplicate-scenes recommendation."""
+    details = rec.details or {}
+    match_id = _normalize_scene_id(details.get("match_scene_id"))
+    if match_id:
+        return match_id
+    match_id = _normalize_scene_id(details.get("scene_b_id"))
+    if match_id:
+        return match_id
+    target = str(rec.target_id or "")
+    if ":" in target:
+        _, right = target.split(":", 1)
+        return _normalize_scene_id(right)
+    return None
+
+
+def _duplicate_match_sort_key(match: dict[str, Any]) -> tuple[float, int]:
+    """Sort duplicate-scene matches by confidence desc, then rec ID desc."""
+    return (
+        float(match.get("confidence") or 0.0),
+        int(match.get("recommendation_id") or 0),
+    )
+
+
+def _group_duplicate_scene_recommendations(recs: list[Recommendation]) -> list[Recommendation]:
+    """Group duplicate-scene recommendations by source scene and top confidence."""
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for rec in recs:
+        source_id = _extract_duplicate_scene_source_id(rec)
+        match_id = _extract_duplicate_scene_match_id(rec)
+        if not source_id or not match_id:
+            continue
+
+        details = rec.details or {}
+        group_key = (str(rec.status or ""), source_id)
+        group = grouped.setdefault(group_key, {
+            "source_scene_id": source_id,
+            "source_summary": deepcopy(details.get("source_summary") or details.get("scene_a_summary") or {}),
+            "matches": [],
+            "top_rec": None,
+            "top_confidence": -1.0,
+        })
+
+        confidence = _parse_duplicate_scene_confidence_percent(rec)
+        match_entry = {
+            "recommendation_id": rec.id,
+            "target_id": rec.target_id,
+            "match_scene_id": match_id,
+            "confidence": confidence,
+            "reasoning": deepcopy(details.get("reasoning") or []),
+            "signal_breakdown": deepcopy(details.get("signal_breakdown") or {}),
+            "source_summary": deepcopy(details.get("source_summary") or details.get("scene_a_summary") or {}),
+            "match_summary": deepcopy(details.get("match_summary") or details.get("scene_b_summary") or {}),
+            "created_at": rec.created_at,
+            "updated_at": rec.updated_at,
+            "resolution_action": rec.resolution_action,
+        }
+        group["matches"].append(match_entry)
+
+        current_top = group["top_rec"]
+        if (
+            current_top is None
+            or confidence > group["top_confidence"]
+            or (confidence == group["top_confidence"] and rec.id > current_top.id)
+        ):
+            group["top_rec"] = rec
+            group["top_confidence"] = confidence
+            if not group["source_summary"]:
+                group["source_summary"] = deepcopy(match_entry["source_summary"])
+
+    grouped_recs: list[Recommendation] = []
+    for group in grouped.values():
+        matches = sorted(group["matches"], key=_duplicate_match_sort_key, reverse=True)
+        if not matches:
+            continue
+
+        top_rec: Recommendation = group["top_rec"]
+        top_match = matches[0]
+        merged_details = deepcopy(top_rec.details or {})
+        merged_details.update({
+            "grouped": True,
+            "source_scene_id": group["source_scene_id"],
+            "scene_a_id": group["source_scene_id"],
+            "scene_b_id": top_match["match_scene_id"],
+            "source_summary": deepcopy(group["source_summary"]),
+            "scene_a_summary": deepcopy(group["source_summary"]),
+            "scene_b_summary": deepcopy(top_match.get("match_summary") or {}),
+            "duplicate_matches": matches,
+            "match_count": len(matches),
+            "top_confidence": group["top_confidence"],
+            "confidence": group["top_confidence"],
+            "reasoning": deepcopy(top_match.get("reasoning") or []),
+            "signal_breakdown": deepcopy(top_match.get("signal_breakdown") or {}),
+        })
+
+        grouped_recs.append(Recommendation(
+            id=top_rec.id,
+            type=top_rec.type,
+            status=top_rec.status,
+            target_type=top_rec.target_type,
+            target_id=top_rec.target_id,
+            details=merged_details,
+            resolution_action=top_rec.resolution_action,
+            resolution_details=top_rec.resolution_details,
+            resolved_at=top_rec.resolved_at,
+            confidence=group["top_confidence"] / 100.0,
+            source_analysis_id=top_rec.source_analysis_id,
+            created_at=top_rec.created_at,
+            updated_at=top_rec.updated_at,
+        ))
+
+    grouped_recs.sort(
+        key=lambda rec: (
+            _parse_duplicate_scene_confidence_percent(rec),
+            int(rec.id or 0),
+        ),
+        reverse=True,
+    )
+    return grouped_recs
+
+
+def _load_all_recommendations(
+    db: RecommendationsDB,
+    *,
+    status: Optional[str] = None,
+    type: Optional[str] = None,
+    target_type: Optional[str] = None,
+    page_size: int = 500,
+) -> list[Recommendation]:
+    """Load all recommendations matching a filter in stable paginated batches."""
+    all_recs: list[Recommendation] = []
+    offset = 0
+    while True:
+        batch = db.get_recommendations(
+            status=status,
+            type=type,
+            target_type=target_type,
+            limit=page_size,
+            offset=offset,
+        )
+        if not batch:
+            break
+        all_recs.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += len(batch)
+    return all_recs
+
+
+def _build_duplicate_scene_group_for_recommendation(
+    db: RecommendationsDB,
+    rec: Recommendation,
+) -> Recommendation:
+    """Expand one duplicate-scene recommendation into its grouped source-scene view."""
+    source_scene_id = _extract_duplicate_scene_source_id(rec)
+    if not source_scene_id:
+        return rec
+
+    grouped_recs = _group_duplicate_scene_recommendations(
+        _load_all_recommendations(
+            db,
+            status=rec.status,
+            type="duplicate_scenes",
+            target_type=rec.target_type,
+        )
+    )
+    for grouped_rec in grouped_recs:
+        if _extract_duplicate_scene_source_id(grouped_rec) == source_scene_id:
+            return grouped_rec
+    return rec
+
+
 async def _validate_and_prune_missing_scene_recommendation(rec, stash, db) -> list[str]:
     """Delete recommendation if any referenced scene no longer exists.
 
@@ -420,6 +666,70 @@ async def _validate_and_prune_missing_scene_recommendation(rec, stash, db) -> li
     return missing_scene_ids
 
 
+async def _validate_and_prune_duplicate_scene_group_recommendations(
+    rec: Recommendation,
+    stash,
+    db: RecommendationsDB,
+) -> tuple[set[int], list[str]]:
+    """Prune stale duplicate-scene recommendations across the whole source-scene group."""
+    source_scene_id = _extract_duplicate_scene_source_id(rec)
+    if not source_scene_id:
+        missing_scene_ids = await _validate_and_prune_missing_scene_recommendation(rec, stash, db)
+        return ({rec.id} if missing_scene_ids else set(), missing_scene_ids)
+
+    group_recs = [
+        candidate
+        for candidate in _load_all_recommendations(
+            db,
+            status=rec.status,
+            type="duplicate_scenes",
+            target_type=rec.target_type,
+        )
+        if _extract_duplicate_scene_source_id(candidate) == source_scene_id
+    ]
+    if not group_recs:
+        return set(), []
+
+    scene_exists: dict[str, Optional[bool]] = {}
+    deleted_rec_ids: set[int] = set()
+    missing_scene_ids: list[str] = []
+    seen_missing_scene_ids: set[str] = set()
+
+    for candidate in group_recs:
+        candidate_missing_scene_ids: list[str] = []
+        for scene_id in _extract_scene_ids_from_recommendation(candidate):
+            if scene_id not in scene_exists:
+                try:
+                    scene = await stash.get_scene_by_id(scene_id)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed scene existence check for recommendation %s scene %s: %s",
+                        candidate.id,
+                        scene_id,
+                        exc,
+                    )
+                    scene_exists[scene_id] = None
+                else:
+                    scene_exists[scene_id] = bool(scene)
+
+            if scene_exists.get(scene_id) is False:
+                candidate_missing_scene_ids.append(scene_id)
+                if scene_id not in seen_missing_scene_ids:
+                    seen_missing_scene_ids.add(scene_id)
+                    missing_scene_ids.append(scene_id)
+
+        if candidate_missing_scene_ids:
+            db.delete_recommendation(candidate.id)
+            deleted_rec_ids.add(candidate.id)
+            logger.info(
+                "Deleted stale duplicate-scene recommendation %s: missing scene(s) %s",
+                candidate.id,
+                ", ".join(candidate_missing_scene_ids),
+            )
+
+    return deleted_rec_ids, missing_scene_ids
+
+
 @router.get("", response_model=RecommendationListResponse)
 async def list_recommendations(
     status: Optional[str] = None,
@@ -430,6 +740,34 @@ async def list_recommendations(
 ):
     """List recommendations with optional filtering."""
     db = get_rec_db()
+    if type == "duplicate_scenes":
+        grouped = _group_duplicate_scene_recommendations(
+            _load_all_recommendations(
+                db,
+                status=status,
+                type=type,
+                target_type=target_type,
+            )
+        )
+        paged = grouped[offset:offset + limit]
+        return RecommendationListResponse(
+            recommendations=[
+                RecommendationResponse(
+                    id=r.id,
+                    type=r.type,
+                    status=r.status,
+                    target_type=r.target_type,
+                    target_id=r.target_id,
+                    details=r.details,
+                    confidence=r.confidence,
+                    created_at=r.created_at,
+                    updated_at=r.updated_at,
+                )
+                for r in paged
+            ],
+            total=len(grouped),
+        )
+
     recs = db.get_recommendations(
         status=status,
         type=type,
@@ -493,6 +831,12 @@ async def get_recommendation_counts():
     """Get recommendation counts by type and status."""
     db = get_rec_db()
     counts = db.get_recommendation_counts()
+    raw_duplicate_recs = _load_all_recommendations(db, type="duplicate_scenes", target_type="scene")
+    if raw_duplicate_recs:
+        grouped_duplicate_counts: dict[str, int] = {}
+        for rec in _group_duplicate_scene_recommendations(raw_duplicate_recs):
+            grouped_duplicate_counts[rec.status] = grouped_duplicate_counts.get(rec.status, 0) + 1
+        counts["duplicate_scenes"] = grouped_duplicate_counts
     total_pending = sum(
         type_counts.get("pending", 0)
         for type_counts in counts.values()
@@ -508,19 +852,37 @@ async def get_recommendation(rec_id: int):
     if not rec:
         raise HTTPException(status_code=404, detail="Recommendation not found")
 
-    # Guard detail views against stale scene references: if any source/target scene
-    # no longer exists, remove the recommendation and treat it as gone.
     stash = get_stash_client()
-    missing_scene_ids = await _validate_and_prune_missing_scene_recommendation(rec, stash, db)
-    if missing_scene_ids:
-        missing_list = ", ".join(missing_scene_ids)
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Recommendation removed because referenced scene no longer exists: "
-                f"{missing_list}"
-            ),
-        )
+    if rec.type == "duplicate_scenes":
+        deleted_rec_ids, missing_scene_ids = await _validate_and_prune_duplicate_scene_group_recommendations(rec, stash, db)
+        if rec_id in deleted_rec_ids:
+            missing_list = ", ".join(missing_scene_ids)
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "Recommendation removed because referenced scene no longer exists: "
+                    f"{missing_list}"
+                ),
+            )
+        rec = db.get_recommendation(rec_id)
+        if not rec:
+            raise HTTPException(status_code=404, detail="Recommendation not found")
+    else:
+        missing_scene_ids = await _validate_and_prune_missing_scene_recommendation(rec, stash, db)
+        if missing_scene_ids:
+            missing_list = ", ".join(missing_scene_ids)
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "Recommendation removed because referenced scene no longer exists: "
+                    f"{missing_list}"
+                ),
+            )
+
+    if rec.type == "duplicate_scenes":
+        rec = _build_duplicate_scene_group_for_recommendation(db, rec)
+        if not rec.details.get("duplicate_matches"):
+            raise HTTPException(status_code=404, detail="Recommendation not found")
 
     return RecommendationResponse(
         id=rec.id,
@@ -751,6 +1113,45 @@ async def merge_scenes(request: MergeScenesRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/actions/merge-duplicate-scene-group")
+async def merge_duplicate_scene_group(request: MergeDuplicateSceneGroupRequest):
+    """Merge selected matched scenes into the grouped source scene."""
+    if not request.source_scene_id or not request.selected_match_scene_ids:
+        raise HTTPException(status_code=400, detail="source_scene_id and selected_match_scene_ids are required")
+
+    stash = get_stash_client()
+    db = get_rec_db()
+    try:
+        result = await stash.merge_scenes(request.selected_match_scene_ids, request.source_scene_id)
+
+        merged_details = {
+            "keeper_id": request.source_scene_id,
+            "source_ids": request.selected_match_scene_ids,
+        }
+        for rec_id in request.selected_recommendation_ids:
+            db.resolve_recommendation(rec_id, action="merged", details=merged_details)
+
+        for rec_id in request.unselected_recommendation_ids:
+            db.resolve_recommendation(
+                rec_id,
+                action="not_duplicate",
+                details={"source_scene_id": request.source_scene_id},
+            )
+            db.add_recommendation_target_dismissal(
+                rec_id,
+                reason=f"Marked not duplicate while merging into scene {request.source_scene_id}",
+            )
+
+        scene_ids_to_cleanup = [str(request.source_scene_id)] + [str(sid) for sid in request.selected_match_scene_ids]
+        for scene_id in scene_ids_to_cleanup:
+            db.delete_pending_duplicate_scene_recommendations_for_scene(scene_id=scene_id)
+            db.delete_pending_scene_fingerprint_for_scene(scene_id=scene_id)
+
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class DeleteSceneRequest(BaseModel):
     """Request to delete a scene."""
     scene_id: str
@@ -771,6 +1172,137 @@ async def delete_scene(request: DeleteSceneRequest):
         return {"success": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/actions/delete-duplicate-scene-match")
+async def delete_duplicate_scene_match(request: DeleteDuplicateSceneMatchRequest):
+    """Delete one matched scene and resolve its grouped duplicate-scene recommendation."""
+    if not request.source_scene_id or not request.match_scene_id:
+        raise HTTPException(status_code=400, detail="source_scene_id and match_scene_id are required")
+
+    stash = get_stash_client()
+    db = get_rec_db()
+    try:
+        result = await stash.destroy_scene(request.match_scene_id, delete_file=request.delete_file)
+        if result:
+            db.resolve_recommendation(
+                request.recommendation_id,
+                action="deleted_match",
+                details={
+                    "source_scene_id": request.source_scene_id,
+                    "deleted_scene_id": request.match_scene_id,
+                },
+            )
+            scene_id = str(request.match_scene_id)
+            db.delete_pending_scene_fingerprint_for_scene(scene_id=scene_id)
+            db.delete_pending_duplicate_scene_recommendations_for_scene(scene_id=scene_id)
+        return {"success": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/actions/delete-duplicate-scene-group")
+async def delete_duplicate_scene_group(request: DeleteDuplicateSceneGroupRequest):
+    """Delete the grouped source scene and resolve the reviewed duplicate set."""
+    if not request.source_scene_id:
+        raise HTTPException(status_code=400, detail="source_scene_id is required")
+
+    stash = get_stash_client()
+    db = get_rec_db()
+    try:
+        result = await stash.destroy_scene(request.source_scene_id, delete_file=request.delete_file)
+        if result:
+            for index, rec_id in enumerate(request.recommendation_ids):
+                action = "deleted_source" if index == 0 else "not_duplicate_after_source_delete"
+                db.resolve_recommendation(
+                    rec_id,
+                    action=action,
+                    details={"deleted_scene_id": request.source_scene_id},
+                )
+
+            scene_id = str(request.source_scene_id)
+            db.delete_pending_scene_fingerprint_for_scene(scene_id=scene_id)
+            db.delete_pending_duplicate_scene_recommendations_for_scene(scene_id=scene_id)
+        return {"success": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/actions/merge-source-into-duplicate-scene-match")
+async def merge_source_into_duplicate_scene_match(request: MergeSourceIntoDuplicateSceneMatchRequest):
+    """Keep one matched scene, merge the source into it, then close sibling matches."""
+    if not request.source_scene_id or not request.keeper_match_scene_id:
+        raise HTTPException(status_code=400, detail="source_scene_id and keeper_match_scene_id are required")
+
+    stash = get_stash_client()
+    db = get_rec_db()
+    try:
+        result = await stash.merge_scenes([request.source_scene_id], request.keeper_match_scene_id)
+
+        db.resolve_recommendation(
+            request.keeper_recommendation_id,
+            action="merged_source_into_match",
+            details={
+                "keeper_id": request.keeper_match_scene_id,
+                "source_ids": [request.source_scene_id],
+                "deleted_match_scene_ids": [match.scene_id for match in request.other_matches],
+            },
+        )
+
+        delete_failures: list[dict[str, str]] = []
+        for other_match in request.other_matches:
+            resolution_action = "deleted_match_after_source_merge"
+            resolution_details: dict[str, Any] = {
+                "source_scene_id": request.source_scene_id,
+                "keeper_id": request.keeper_match_scene_id,
+                "deleted_scene_id": other_match.scene_id,
+            }
+
+            try:
+                deleted = await stash.destroy_scene(other_match.scene_id, delete_file=False)
+                if deleted:
+                    scene_id = str(other_match.scene_id)
+                    db.delete_pending_scene_fingerprint_for_scene(scene_id=scene_id)
+                    db.delete_pending_duplicate_scene_recommendations_for_scene(scene_id=scene_id)
+                else:
+                    resolution_action = "closed_after_source_merge"
+                    resolution_details["delete_error"] = "Delete returned false"
+                    delete_failures.append({
+                        "scene_id": str(other_match.scene_id),
+                        "error": "Delete returned false",
+                    })
+            except Exception as exc:
+                resolution_action = "closed_after_source_merge"
+                resolution_details["delete_error"] = str(exc)
+                delete_failures.append({
+                    "scene_id": str(other_match.scene_id),
+                    "error": str(exc),
+                })
+
+            db.resolve_recommendation(
+                other_match.recommendation_id,
+                action=resolution_action,
+                details=resolution_details,
+            )
+
+        for scene_id in [str(request.source_scene_id), str(request.keeper_match_scene_id)]:
+            db.delete_pending_duplicate_scene_recommendations_for_scene(scene_id=scene_id)
+            db.delete_pending_scene_fingerprint_for_scene(scene_id=scene_id)
+
+        return {"success": True, "result": result, "delete_failures": delete_failures}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/actions/dismiss-duplicate-scene-group")
+async def dismiss_duplicate_scene_group(request: DismissDuplicateSceneGroupRequest):
+    """Dismiss all duplicate-scene recommendations in a grouped source-scene review."""
+    db = get_rec_db()
+    dismissed_count = 0
+    for rec_id in request.recommendation_ids:
+        if db.dismiss_recommendation(rec_id, reason=request.reason or "Marked not duplicates"):
+            dismissed_count += 1
+    return {"success": True, "dismissed_count": dismissed_count}
 
 
 @router.get("/scene/{scene_id}")

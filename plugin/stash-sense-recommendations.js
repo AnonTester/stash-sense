@@ -134,6 +134,48 @@
       return apiCall('rec_get_scene', { scene_id: sceneId });
     },
 
+    async mergeDuplicateSceneGroup(sourceSceneId, selectedMatchSceneIds, selectedRecommendationIds, unselectedRecommendationIds) {
+      return apiCall('rec_merge_duplicate_scene_group', {
+        source_scene_id: sourceSceneId,
+        selected_match_scene_ids: selectedMatchSceneIds,
+        selected_recommendation_ids: selectedRecommendationIds,
+        unselected_recommendation_ids: unselectedRecommendationIds || [],
+      });
+    },
+
+    async deleteDuplicateSceneGroup(sourceSceneId, recommendationIds, deleteFile = false) {
+      return apiCall('rec_delete_duplicate_scene_group', {
+        source_scene_id: sourceSceneId,
+        recommendation_ids: recommendationIds,
+        delete_file: deleteFile,
+      });
+    },
+
+    async deleteDuplicateSceneMatch(sourceSceneId, matchSceneId, recommendationId, deleteFile = false) {
+      return apiCall('rec_delete_duplicate_scene_match', {
+        source_scene_id: sourceSceneId,
+        match_scene_id: matchSceneId,
+        recommendation_id: recommendationId,
+        delete_file: deleteFile,
+      });
+    },
+
+    async mergeSourceIntoDuplicateSceneMatch(sourceSceneId, keeperMatchSceneId, keeperRecommendationId, otherMatches = []) {
+      return apiCall('rec_merge_source_into_duplicate_scene_match', {
+        source_scene_id: sourceSceneId,
+        keeper_match_scene_id: keeperMatchSceneId,
+        keeper_recommendation_id: keeperRecommendationId,
+        other_matches: otherMatches,
+      });
+    },
+
+    async dismissDuplicateSceneGroup(recommendationIds, reason = null) {
+      return apiCall('rec_dismiss_duplicate_scene_group', {
+        recommendation_ids: recommendationIds,
+        reason,
+      });
+    },
+
     // Fingerprint operations
     async getFingerprintStatus() {
       return apiCall('fp_status');
@@ -1293,14 +1335,14 @@
         : sb.metadata_score > 0 ? 'Metadata'
         : 'Face analysis';
 
-      const sumA = d.scene_a_summary || {};
-      const sumB = d.scene_b_summary || {};
-      const titleA = sumA.title || `Scene ${d.scene_a_id}`;
-      const titleB = sumB.title || `Scene ${d.scene_b_id}`;
-      const studio = sumA.studio || sumB.studio || '';
-      const performers = (sumA.performers || sumB.performers || []).join(', ');
+      const sumA = d.source_summary || d.scene_a_summary || {};
+      const titleA = sumA.title || `Scene ${d.source_scene_id || d.scene_a_id}`;
+      const studio = sumA.studio || '';
+      const performers = (sumA.performers || []).join(', ');
       const contextParts = [studio, performers].filter(Boolean);
-      const contextLine = contextParts.length ? contextParts.join(' · ') : `IDs: ${d.scene_a_id} / ${d.scene_b_id}`;
+      const contextLine = contextParts.length ? contextParts.join(' · ') : `Scene ID: ${d.source_scene_id || d.scene_a_id}`;
+      const matchCount = Math.max(1, Number(d.match_count || (d.duplicate_matches || []).length || 1));
+      const duplicateLabel = `${matchCount} possible duplicate${matchCount !== 1 ? 's' : ''}`;
 
       return SS.createElement('div', {
         className: 'ss-rec-card ss-rec-dup-scenes',
@@ -1310,9 +1352,10 @@
               <svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z"/></svg>
             </div>
             <div class="ss-rec-card-info">
-              <div class="ss-rec-card-title">${SS.escapeHtml(titleA)} &harr; ${SS.escapeHtml(titleB)}</div>
+              <div class="ss-rec-card-title">${SS.escapeHtml(titleA)}</div>
               <div class="ss-rec-card-subtitle">
                 <span style="color: ${confColor}">${Math.round(conf)}% confidence</span>
+                &middot; ${duplicateLabel}
                 &middot; ${primarySignal}
               </div>
               <div class="ss-rec-card-fields">${SS.escapeHtml(contextLine)}</div>
@@ -1806,25 +1849,54 @@
 
   async function renderDuplicateScenesDetail(container, rec) {
     const details = rec.details;
-    const sceneAId = String(details.scene_a_id || rec.target_id);
-    const sceneBId = String(details.scene_b_id);
+    const sourceSceneId = String(details.source_scene_id || details.scene_a_id || '');
+    const rawMatches = Array.isArray(details.duplicate_matches) && details.duplicate_matches.length > 0
+      ? details.duplicate_matches
+      : [{
+          recommendation_id: rec.id,
+          target_id: rec.target_id,
+          match_scene_id: String(details.scene_b_id || ''),
+          confidence: getDuplicateSceneConfidencePercent(rec),
+          reasoning: details.reasoning || [],
+          signal_breakdown: details.signal_breakdown || {},
+          source_summary: details.source_summary || details.scene_a_summary || {},
+          match_summary: details.match_summary || details.scene_b_summary || {},
+        }];
+    const matches = rawMatches
+      .filter(match => match && match.match_scene_id)
+      .map(match => ({
+        ...match,
+        recommendation_id: Number(match.recommendation_id),
+        match_scene_id: String(match.match_scene_id),
+        confidence: Number(match.confidence || 0),
+      }))
+      .sort((a, b) => {
+        if (a.confidence !== b.confidence) return b.confidence - a.confidence;
+        return Number(b.recommendation_id || 0) - Number(a.recommendation_id || 0);
+      });
 
     container.innerHTML = '<div class="ss-loading">Loading scene details...</div>';
 
-    let sceneA, sceneB;
+    let sourceScene;
+    let activeMatchEntries = [];
     try {
-      [sceneA, sceneB] = await Promise.all([
-        RecommendationsAPI.getSceneDetail(sceneAId),
-        RecommendationsAPI.getSceneDetail(sceneBId),
-      ]);
+      sourceScene = await RecommendationsAPI.getSceneDetail(sourceSceneId);
+      activeMatchEntries = await Promise.all(
+        matches.map(async (match) => {
+          try {
+            const scene = await RecommendationsAPI.getSceneDetail(match.match_scene_id);
+            return { match, scene, selected: false };
+          } catch (_) {
+            return { match, scene: null, selected: false };
+          }
+        })
+      );
     } catch (e) {
       container.innerHTML = '<div class="ss-error-state"><p>Failed to load scenes: ' + e.message + '</p></div>';
       return;
     }
 
-    const conf = getDuplicateSceneConfidencePercent(rec);
-    const confColor = conf >= 80 ? '#28a745' : conf >= 60 ? '#ffc107' : '#6c757d';
-    const reasoning = details.reasoning || [];
+    const sourceSummary = details.source_summary || details.scene_a_summary || {};
 
     function formatDuration(seconds) {
       if (!seconds) return 'N/A';
@@ -1853,165 +1925,438 @@
       }).filter(Boolean).join(', ');
     }
 
-    function renderSceneCard(scene, id, otherId) {
+    function renderSummaryFallback(summary, id) {
+      const title = summary?.title || `Scene ${id}`;
+      const studio = summary?.studio ? '<li><strong>Studio:</strong> ' + escapeHtml(summary.studio) + '</li>' : '';
+      const performers = summary?.performers?.length
+        ? '<li><strong>Performers:</strong> ' + escapeHtml(summary.performers.join(', ')) + '</li>'
+        : '';
+      const duration = summary?.duration ? '<li><strong>Duration:</strong> ' + formatDuration(summary.duration) + '</li>' : '';
+      return {
+        title,
+        metaHtml: studio + performers + duration,
+      };
+    }
+
+    function renderSceneCard(scene, id, options = {}) {
+      const {
+        summaryFallback = null,
+        matchMeta = null,
+        showCheckbox = false,
+        checkboxChecked = false,
+        isSource = false,
+        actionButtonsHtml = '',
+      } = options;
       const file = scene?.files?.[0];
       const resolution = file ? file.width + 'x' + file.height : 'N/A';
       const screenshotUrl = relativeUrl(scene?.paths?.screenshot);
       const previewUrl = relativeUrl(scene?.paths?.preview);
       const studioLink = renderLocalEntityLink('studios', scene?.studio?.id, scene?.studio?.name);
       const performerLinks = renderLocalPerformerLinks(scene?.performers || []);
+      const fallback = renderSummaryFallback(summaryFallback, id);
+      const title = scene?.title || fallback.title || 'Unknown Scene';
+      const metaHtml = [
+        studioLink ? '<li><strong>Studio:</strong> ' + studioLink + '</li>' : '',
+        performerLinks ? '<li><strong>Performers:</strong> ' + performerLinks + '</li>' : '',
+        scene?.date ? '<li><strong>Date:</strong> ' + scene.date + '</li>' : '',
+        (!scene?.date && summaryFallback?.date) ? '<li><strong>Date:</strong> ' + escapeHtml(summaryFallback.date) + '</li>' : '',
+        '<li><strong>Duration:</strong> ' + formatDuration(file?.duration || summaryFallback?.duration) + '</li>',
+        file ? '<li><strong>File:</strong> ' + resolution + ' &middot; ' + (file.video_codec || 'N/A') + ' &middot; ' + formatFileSize(file.size) + '</li>' : '',
+      ].filter(Boolean).join('') || fallback.metaHtml || '<li><strong>Scene ID:</strong> ' + escapeHtml(id) + '</li>';
+      const confidenceHtml = matchMeta
+        ? '<div class="ss-dup-match-badges">' +
+            '<span class="ss-signal-badge" style="color:' + (matchMeta.confidence >= 80 ? '#28a745' : matchMeta.confidence >= 60 ? '#ffc107' : '#6c757d') + '">' +
+              Math.round(matchMeta.confidence) + '% confidence' +
+            '</span>' +
+            ((matchMeta.reasoning && matchMeta.reasoning[0]) ? '<span class="ss-signal-badge">' + escapeHtml(matchMeta.reasoning[0]) + '</span>' : '') +
+          '</div>'
+        : '';
+      const checkboxHtml = showCheckbox
+        ? '<label class="ss-dup-match-checkbox">' +
+            '<input type="checkbox" class="ss-dup-match-select" data-rec-id="' + escapeHtml(String(matchMeta?.recommendation_id || '')) + '" data-scene-id="' + escapeHtml(String(id)) + '"' + (checkboxChecked ? ' checked' : '') + ' />' +
+            '<span>Select for merge</span>' +
+          '</label>'
+        : '';
+      const sourceNote = isSource ? '<div class="ss-dup-source-note">Source scene</div>' : '';
 
-      return '<div class="ss-dup-scene-card" data-id="' + id + '">' +
+      return '<div class="ss-dup-scene-card' + (isSource ? ' ss-dup-source-card' : '') + '" data-id="' + id + '">' +
         '<div class="ss-dup-scene-thumb">' +
           (screenshotUrl ? '<img src="' + screenshotUrl + '" alt="Scene ' + id + '" loading="lazy" onerror="this.style.display=\'none\'" />' : '<div class="ss-no-image">No Screenshot</div>') +
           (previewUrl ? '<video class="ss-dup-scene-preview" muted loop preload="none" data-src="' + previewUrl + '"></video>' : '') +
         '</div>' +
-        '<h4><a href="/scenes/' + id + '" target="_blank" rel="noopener">' + escapeHtml(scene?.title || 'Unknown Scene') + '</a></h4>' +
-        '<ul class="ss-dup-scene-meta">' +
-          (studioLink ? '<li><strong>Studio:</strong> ' + studioLink + '</li>' : '') +
-          (performerLinks ? '<li><strong>Performers:</strong> ' + performerLinks + '</li>' : '') +
-          (scene?.date ? '<li><strong>Date:</strong> ' + scene.date + '</li>' : '') +
-          '<li><strong>Duration:</strong> ' + formatDuration(file?.duration) + '</li>' +
-          (file ? '<li><strong>File:</strong> ' + resolution + ' &middot; ' + (file.video_codec || 'N/A') + ' &middot; ' + formatFileSize(file.size) + '</li>' : '') +
-        '</ul>' +
-        '<div class="ss-dup-card-actions">' +
-          '<button class="ss-btn ss-btn-primary ss-dup-keep-merge-btn" data-keeper="' + id + '" data-source="' + otherId + '">Keep + Merge</button>' +
-          '<button class="ss-btn ss-btn-danger ss-dup-delete-btn" data-delete="' + id + '" data-keep="' + otherId + '">Delete</button>' +
+        '<div class="ss-dup-scene-header-row">' +
+          '<div class="ss-dup-scene-title-block">' +
+            '<h4><a href="/scenes/' + id + '" target="_blank" rel="noopener">' + escapeHtml(title) + '</a></h4>' +
+            sourceNote +
+          '</div>' +
+          checkboxHtml +
         '</div>' +
+        confidenceHtml +
+        '<ul class="ss-dup-scene-meta">' + metaHtml + '</ul>' +
+        actionButtonsHtml +
       '</div>';
     }
 
-    container.innerHTML =
-      '<div class="ss-detail-dup-scenes">' +
-        '<h2>Duplicate Scenes</h2>' +
-        '<div class="ss-dup-confidence" style="color: ' + confColor + '">' +
-          Math.round(conf) + '% confidence &mdash; ' + (reasoning[0] || '') +
-        '</div>' +
-        '<div class="ss-dup-signals">' +
-          reasoning.slice(1).map(function(r) { return '<span class="ss-signal-badge">' + escapeHtml(r) + '</span>'; }).join('') +
-        '</div>' +
-        '<div class="ss-dup-scenes-grid">' +
-          renderSceneCard(sceneA, sceneAId, sceneBId) +
-          '<div class="ss-dup-vs">VS</div>' +
-          renderSceneCard(sceneB, sceneBId, sceneAId) +
-        '</div>' +
-        '<div class="ss-detail-actions ss-detail-actions-center">' +
-          '<button class="ss-btn ss-btn-secondary" id="ss-dismiss-btn">Not Duplicates</button>' +
-        '</div>' +
-      '</div>';
+    function getSceneTitle(scene, summaryFallback, fallbackId) {
+      return scene?.title || summaryFallback?.title || ('Scene ' + fallbackId);
+    }
+
+    function getSceneTitles() {
+      const sceneTitles = {};
+      sceneTitles[sourceSceneId] = getSceneTitle(sourceScene, sourceSummary, sourceSceneId);
+      activeMatchEntries.forEach(function(entry) {
+        sceneTitles[entry.match.match_scene_id] = getSceneTitle(entry.scene, entry.match.match_summary, entry.match.match_scene_id);
+      });
+      return sceneTitles;
+    }
+
+    function getActiveMatches() {
+      return activeMatchEntries.map(function(entry) { return entry.match; });
+    }
+
+    function getSelectedMatches() {
+      if (activeMatchEntries.length <= 1) {
+        return getActiveMatches();
+      }
+      return activeMatchEntries
+        .filter(function(entry) { return entry.selected; })
+        .map(function(entry) { return entry.match; });
+    }
+
+    function updateCurrentRecommendationState() {
+      if (!currentState.selectedRec || currentState.selectedRec.id !== rec.id) return;
+      currentState.selectedRec = {
+        ...currentState.selectedRec,
+        details: {
+          ...currentState.selectedRec.details,
+          duplicate_matches: activeMatchEntries.map(function(entry) { return entry.match; }),
+          scene_b_id: activeMatchEntries[0]?.match?.match_scene_id || null,
+          confidence: activeMatchEntries[0]?.match?.confidence || currentState.selectedRec.details?.confidence || 0,
+          reasoning: activeMatchEntries[0]?.match?.reasoning || currentState.selectedRec.details?.reasoning || [],
+          signal_breakdown: activeMatchEntries[0]?.match?.signal_breakdown || currentState.selectedRec.details?.signal_breakdown || {},
+          match_summary: activeMatchEntries[0]?.match?.match_summary || currentState.selectedRec.details?.match_summary || {},
+        },
+      };
+    }
+
+    function returnToRecommendationList() {
+      currentState.view = 'list';
+      currentState.selectedRec = null;
+      renderCurrentView(document.getElementById('ss-recommendations') || container);
+    }
+
+    function ensureSuccessful(result, fallbackMessage) {
+      if (!result || result.success !== true) {
+        throw new Error(fallbackMessage);
+      }
+    }
 
     function disableAllDupActions() {
-      container.querySelectorAll('.ss-dup-keep-merge-btn, .ss-dup-delete-btn, #ss-dismiss-btn').forEach(function(b) { b.disabled = true; });
+      container.querySelectorAll('.ss-dup-action-btn, #ss-dismiss-btn, .ss-dup-match-select').forEach(function(el) {
+        el.disabled = true;
+      });
     }
 
     function enableAllDupActions() {
-      container.querySelectorAll('.ss-dup-keep-merge-btn, .ss-dup-delete-btn, #ss-dismiss-btn').forEach(function(b) { b.disabled = false; });
+      container.querySelectorAll('.ss-dup-action-btn, #ss-dismiss-btn, .ss-dup-match-select').forEach(function(el) {
+        el.disabled = false;
+      });
+      const keepMergeBtn = container.querySelector('#ss-dup-keep-merge-btn');
+      if (keepMergeBtn) {
+        keepMergeBtn.disabled = activeMatchEntries.length > 1 && getSelectedMatches().length === 0;
+      }
     }
 
-    // Scene title lookup for confirmations
-    var sceneTitles = {};
-    sceneTitles[sceneAId] = sceneA?.title || 'Unknown Scene';
-    sceneTitles[sceneBId] = sceneB?.title || 'Unknown Scene';
-    var isRecommendationNotFoundError = function(err) {
-      var msg = String(err?.message || err || '').toLowerCase();
-      return msg.indexOf('recommendation not found') !== -1;
-    };
+    function attachPreviewHover() {
+      container.querySelectorAll('.ss-dup-scene-thumb').forEach(function(thumb) {
+        var video = thumb.querySelector('.ss-dup-scene-preview');
+        if (!video) return;
+        var img = thumb.querySelector('img');
 
-    // Keep + Merge action (delegated)
-    container.querySelectorAll('.ss-dup-keep-merge-btn').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        var keeperId = btn.getAttribute('data-keeper');
-        var sourceId = btn.getAttribute('data-source');
-        showConfirmModal(
-          'Keep "' + escapeHtml(sceneTitles[keeperId]) + '" and merge "' + escapeHtml(sceneTitles[sourceId]) + '" into it? Files, tags, and performers will be consolidated.',
-          async function() {
-            try {
-              disableAllDupActions();
-              btn.textContent = 'Merging...';
-              await RecommendationsAPI.mergeScenes(keeperId, [sourceId]);
-              try {
-                await RecommendationsAPI.resolve(rec.id, 'merged', { keeper_id: keeperId, source_id: sourceId });
-              } catch (resolveErr) {
-                if (!isRecommendationNotFoundError(resolveErr)) throw resolveErr;
-              }
-              showSuccessAndReturn(btn, 'Merged!');
-            } catch (e) {
-              btn.textContent = 'Failed: ' + e.message;
-              btn.classList.add('ss-btn-error');
-              enableAllDupActions();
-            }
+        thumb.addEventListener('mouseenter', function() {
+          if (!video.src && video.dataset.src) {
+            video.src = video.dataset.src;
           }
-        );
-      });
-    });
+          if (img) img.style.opacity = '0';
+          video.style.opacity = '1';
+          video.play().catch(function() {});
+        });
 
-    // Delete action (delegated)
-    container.querySelectorAll('.ss-dup-delete-btn').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        var deleteId = btn.getAttribute('data-delete');
-        var keepId = btn.getAttribute('data-keep');
-        showConfirmModal(
-          'Delete "' + escapeHtml(sceneTitles[deleteId]) + '"? The scene and its file will be permanently deleted from disk. This cannot be undone.',
-          async function() {
-            try {
-              disableAllDupActions();
-              btn.textContent = 'Deleting...';
-              await RecommendationsAPI.deleteScene(deleteId, false);
-              try {
-                await RecommendationsAPI.resolve(rec.id, 'deleted', { deleted_scene_id: deleteId, kept_scene_id: keepId });
-              } catch (resolveErr) {
-                if (!isRecommendationNotFoundError(resolveErr)) throw resolveErr;
-              }
-              showSuccessAndReturn(btn, 'Deleted!');
-            } catch (e) {
-              btn.textContent = 'Failed: ' + e.message;
-              btn.classList.add('ss-btn-error');
-              enableAllDupActions();
+        thumb.addEventListener('mouseleave', function() {
+          video.pause();
+          if (img) img.style.opacity = '1';
+          video.style.opacity = '0';
+          setTimeout(function() { video.currentTime = 0; }, 200);
+        });
+      });
+    }
+
+    function findMatchEntryByRecommendationId(recId) {
+      return activeMatchEntries.find(function(entry) {
+        return String(entry.match.recommendation_id) === String(recId);
+      });
+    }
+
+    async function handleDeleteMatch(entry, buttonEl) {
+      const sceneTitles = getSceneTitles();
+      showConfirmModal(
+        'Delete matched scene "' + sceneTitles[entry.match.match_scene_id] + '"? It will be removed from this review and cannot be undone.',
+        async function() {
+          try {
+            disableAllDupActions();
+            buttonEl.textContent = 'Deleting...';
+
+            const deleteResult = await RecommendationsAPI.deleteDuplicateSceneMatch(
+              sourceSceneId,
+              entry.match.match_scene_id,
+              entry.match.recommendation_id,
+              false,
+            );
+            ensureSuccessful(deleteResult, 'Delete failed');
+
+            activeMatchEntries = activeMatchEntries.filter(function(candidate) {
+              return String(candidate.match.recommendation_id) !== String(entry.match.recommendation_id);
+            });
+            updateCurrentRecommendationState();
+
+            if (!activeMatchEntries.length) {
+              showToast('Matched scene removed. No duplicate matches remain for this source.', 'info');
+              returnToRecommendationList();
+              return;
             }
-          },
-          { showDontAsk: true, storageKey: 'delete-dup-scene' }
-        );
+
+            renderDetail();
+            showToast('Matched scene removed from this review.', 'info');
+          } catch (e) {
+            buttonEl.textContent = 'Failed: ' + e.message;
+            buttonEl.classList.add('ss-btn-error');
+            enableAllDupActions();
+          }
+        },
+        { showDontAsk: true, storageKey: 'delete-dup-scene-match' }
+      );
+    }
+
+    async function handleMergeIntoMatch(entry, buttonEl) {
+      const sceneTitles = getSceneTitles();
+      const otherEntries = activeMatchEntries.filter(function(candidate) {
+        return String(candidate.match.recommendation_id) !== String(entry.match.recommendation_id);
       });
-    });
 
-    // Video preview on hover
-    container.querySelectorAll('.ss-dup-scene-thumb').forEach(function(thumb) {
-      var video = thumb.querySelector('.ss-dup-scene-preview');
-      if (!video) return;
-      var img = thumb.querySelector('img');
+      showConfirmModal(
+        'Keep matched scene "' + sceneTitles[entry.match.match_scene_id] + '" and merge source scene "' + sceneTitles[sourceSceneId] + '" into it? Any other matched scenes in this review will be deleted.',
+        async function() {
+          try {
+            disableAllDupActions();
+            buttonEl.textContent = 'Merging...';
 
-      thumb.addEventListener('mouseenter', function() {
-        if (!video.src && video.dataset.src) {
-          video.src = video.dataset.src;
+            const mergeResult = await RecommendationsAPI.mergeSourceIntoDuplicateSceneMatch(
+              sourceSceneId,
+              entry.match.match_scene_id,
+              entry.match.recommendation_id,
+              otherEntries.map(function(otherEntry) {
+                return {
+                  recommendation_id: otherEntry.match.recommendation_id,
+                  scene_id: otherEntry.match.match_scene_id,
+                };
+              }),
+            );
+            ensureSuccessful(mergeResult, 'Merge failed');
+            const deleteWarnings = Array.isArray(mergeResult.delete_failures)
+              ? mergeResult.delete_failures
+              : [];
+            if (deleteWarnings.length) {
+              buttonEl.textContent = 'Merged';
+              buttonEl.classList.add('ss-btn-success');
+              showToast(
+                'Source merged, but some other matches could not be deleted: ' +
+                  deleteWarnings.map(function(item) {
+                    const label = sceneTitles[item.scene_id] || ('Scene ' + item.scene_id);
+                    return label + ': ' + item.error;
+                  }).join('; '),
+                'warning',
+                6000,
+              );
+              setTimeout(returnToRecommendationList, 1500);
+              return;
+            }
+
+            showSuccessAndReturn(buttonEl, 'Merged!');
+          } catch (e) {
+            buttonEl.textContent = 'Failed: ' + e.message;
+            buttonEl.classList.add('ss-btn-error');
+            enableAllDupActions();
+          }
         }
-        if (img) img.style.opacity = '0';
-        video.style.opacity = '1';
-        video.play().catch(function() {});
+      );
+    }
+
+    function renderDetail() {
+      const activeMatches = getActiveMatches();
+      const multipleMatches = activeMatchEntries.length > 1;
+      const topMatch = activeMatches[0] || null;
+      const topConfidence = topMatch ? Number(topMatch.confidence || 0) : getDuplicateSceneConfidencePercent(rec);
+      const confColor = topConfidence >= 80 ? '#28a745' : topConfidence >= 60 ? '#ffc107' : '#6c757d';
+      const topReasoning = Array.isArray(topMatch?.reasoning) && topMatch.reasoning.length
+        ? topMatch.reasoning
+        : (details.reasoning || []);
+
+      const matchCardsHtml = activeMatchEntries.map(function(entry) {
+        return renderSceneCard(entry.scene, entry.match.match_scene_id, {
+          summaryFallback: entry.match.match_summary || {},
+          matchMeta: entry.match,
+          showCheckbox: multipleMatches,
+          checkboxChecked: !!entry.selected,
+          actionButtonsHtml:
+            '<div class="ss-dup-card-actions">' +
+              '<button class="ss-btn ss-btn-primary ss-dup-match-keep-btn ss-dup-action-btn" data-rec-id="' + escapeHtml(String(entry.match.recommendation_id)) + '">Keep Match + Merge Source</button>' +
+              '<button class="ss-btn ss-btn-danger ss-dup-match-delete-btn ss-dup-action-btn" data-rec-id="' + escapeHtml(String(entry.match.recommendation_id)) + '">Delete Match</button>' +
+            '</div>',
+        });
+      }).join('');
+
+      container.innerHTML =
+        '<div class="ss-detail-dup-scenes">' +
+          '<h2>Duplicate Scenes</h2>' +
+          '<div class="ss-dup-confidence" style="color: ' + confColor + '">' +
+            Math.round(topConfidence) + '% confidence' + (topReasoning[0] ? ' &mdash; ' + escapeHtml(topReasoning[0]) : '') +
+          '</div>' +
+          '<div class="ss-dup-group-note">' + activeMatchEntries.length + ' possible duplicate' + (activeMatchEntries.length !== 1 ? 's' : '') + ' for this source scene</div>' +
+          '<div class="ss-dup-signals">' +
+            topReasoning.slice(1).map(function(r) { return '<span class="ss-signal-badge">' + escapeHtml(r) + '</span>'; }).join('') +
+          '</div>' +
+          '<div class="ss-dup-scenes-grid">' +
+            '<div class="ss-dup-source-column">' +
+              renderSceneCard(sourceScene, sourceSceneId, {
+                summaryFallback: sourceSummary,
+                isSource: true,
+              }) +
+              '<div class="ss-dup-card-actions">' +
+                '<button class="ss-btn ss-btn-primary ss-dup-keep-merge-btn ss-dup-action-btn" id="ss-dup-keep-merge-btn">' + (multipleMatches ? 'Keep + Merge Selected' : 'Keep + Merge') + '</button>' +
+                '<button class="ss-btn ss-btn-danger ss-dup-delete-btn ss-dup-action-btn" id="ss-dup-delete-btn">Delete Source</button>' +
+              '</div>' +
+            '</div>' +
+            '<div class="ss-dup-matches-column">' +
+              '<div class="ss-dup-matches-title">Possible Matches</div>' +
+              '<div class="ss-dup-matches-list">' + matchCardsHtml + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="ss-detail-actions ss-detail-actions-center">' +
+            '<button class="ss-btn ss-btn-secondary" id="ss-dismiss-btn">Not Duplicates</button>' +
+          '</div>' +
+        '</div>';
+
+      const keepMergeBtn = container.querySelector('#ss-dup-keep-merge-btn');
+      const deleteBtn = container.querySelector('#ss-dup-delete-btn');
+      const dismissBtn = container.querySelector('#ss-dismiss-btn');
+      const matchCheckboxes = Array.from(container.querySelectorAll('.ss-dup-match-select'));
+      const sceneTitles = getSceneTitles();
+
+      matchCheckboxes.forEach(function(cb) {
+        cb.addEventListener('change', function() {
+          const entry = findMatchEntryByRecommendationId(cb.dataset.recId);
+          if (!entry) return;
+          entry.selected = cb.checked;
+          if (keepMergeBtn) {
+            keepMergeBtn.disabled = activeMatchEntries.length > 1 && getSelectedMatches().length === 0;
+          }
+        });
       });
 
-      thumb.addEventListener('mouseleave', function() {
-        video.pause();
-        if (img) img.style.opacity = '1';
-        video.style.opacity = '0';
-        setTimeout(function() { video.currentTime = 0; }, 200);
-      });
-    });
+      if (keepMergeBtn) {
+        keepMergeBtn.disabled = multipleMatches && getSelectedMatches().length === 0;
+        keepMergeBtn.addEventListener('click', function() {
+          const selectedMatches = getSelectedMatches();
+          const selectedSceneIds = selectedMatches.map(function(match) { return match.match_scene_id; });
+          const selectedRecIds = selectedMatches.map(function(match) { return match.recommendation_id; });
+          const unselectedRecIds = activeMatches
+            .filter(function(match) { return selectedRecIds.indexOf(match.recommendation_id) === -1; })
+            .map(function(match) { return match.recommendation_id; });
+          if (selectedSceneIds.length === 0) return;
 
-    // Dismiss action
-    container.querySelector('#ss-dismiss-btn').addEventListener('click', async function() {
-      const btn = container.querySelector('#ss-dismiss-btn');
-      try {
-        btn.disabled = true;
-        btn.textContent = 'Dismissing...';
-        await RecommendationsAPI.dismiss(rec.id, 'User dismissed');
-        currentState.view = 'list';
-        currentState.selectedRec = null;
-        renderCurrentView(document.getElementById('ss-recommendations'));
-      } catch (e) {
-        btn.textContent = 'Failed: ' + e.message;
-        btn.disabled = false;
+          showConfirmModal(
+            'Keep "' + sceneTitles[sourceSceneId] + '" and merge ' + selectedSceneIds.length + ' selected scene' + (selectedSceneIds.length !== 1 ? 's' : '') + ' into it? All unselected matches will be marked not duplicates.',
+            async function() {
+              try {
+                disableAllDupActions();
+                keepMergeBtn.textContent = 'Merging...';
+                await RecommendationsAPI.mergeDuplicateSceneGroup(
+                  sourceSceneId,
+                  selectedSceneIds,
+                  selectedRecIds,
+                  unselectedRecIds,
+                );
+                showSuccessAndReturn(keepMergeBtn, 'Merged!');
+              } catch (e) {
+                keepMergeBtn.textContent = 'Failed: ' + e.message;
+                keepMergeBtn.classList.add('ss-btn-error');
+                enableAllDupActions();
+              }
+            }
+          );
+        });
       }
-    });
+
+      if (deleteBtn) {
+        deleteBtn.addEventListener('click', function() {
+          showConfirmModal(
+            'Delete source scene "' + sceneTitles[sourceSceneId] + '"? All current matches in this review will be closed. This cannot be undone.',
+            async function() {
+              try {
+                disableAllDupActions();
+                deleteBtn.textContent = 'Deleting...';
+                await RecommendationsAPI.deleteDuplicateSceneGroup(
+                  sourceSceneId,
+                  activeMatches.map(function(match) { return match.recommendation_id; }),
+                  false,
+                );
+                showSuccessAndReturn(deleteBtn, 'Deleted!');
+              } catch (e) {
+                deleteBtn.textContent = 'Failed: ' + e.message;
+                deleteBtn.classList.add('ss-btn-error');
+                enableAllDupActions();
+              }
+            },
+            { showDontAsk: true, storageKey: 'delete-dup-scene' }
+          );
+        });
+      }
+
+      container.querySelectorAll('.ss-dup-match-delete-btn').forEach(function(buttonEl) {
+        buttonEl.addEventListener('click', function() {
+          const entry = findMatchEntryByRecommendationId(buttonEl.dataset.recId);
+          if (!entry) return;
+          handleDeleteMatch(entry, buttonEl);
+        });
+      });
+
+      container.querySelectorAll('.ss-dup-match-keep-btn').forEach(function(buttonEl) {
+        buttonEl.addEventListener('click', function() {
+          const entry = findMatchEntryByRecommendationId(buttonEl.dataset.recId);
+          if (!entry) return;
+          handleMergeIntoMatch(entry, buttonEl);
+        });
+      });
+
+      attachPreviewHover();
+
+      dismissBtn.addEventListener('click', async function() {
+        try {
+          dismissBtn.disabled = true;
+          dismissBtn.textContent = 'Dismissing...';
+          await RecommendationsAPI.dismissDuplicateSceneGroup(
+            activeMatches.map(function(match) { return match.recommendation_id; }),
+            'Marked not duplicates',
+          );
+          returnToRecommendationList();
+        } catch (e) {
+          dismissBtn.textContent = 'Failed: ' + e.message;
+          dismissBtn.disabled = false;
+        }
+      });
+    }
+
+    renderDetail();
   }
 
   // ==================== Confirmation Modal ====================

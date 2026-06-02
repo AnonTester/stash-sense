@@ -486,6 +486,59 @@ def rec_get_scene(sidecar_url, scene_id):
     return sidecar_get(sidecar_url, f"/recommendations/scene/{scene_id}")
 
 
+def rec_merge_duplicate_scene_group(sidecar_url, source_scene_id, selected_match_scene_ids, selected_recommendation_ids, unselected_recommendation_ids):
+    """Merge selected duplicate-scene matches into the source scene."""
+    data = {
+        "source_scene_id": source_scene_id,
+        "selected_match_scene_ids": selected_match_scene_ids,
+        "selected_recommendation_ids": selected_recommendation_ids,
+        "unselected_recommendation_ids": unselected_recommendation_ids,
+    }
+    return sidecar_post(sidecar_url, "/recommendations/actions/merge-duplicate-scene-group", data, timeout=120)
+
+
+def rec_delete_duplicate_scene_group(sidecar_url, source_scene_id, recommendation_ids, delete_file=False):
+    """Delete the grouped duplicate-scene source scene."""
+    data = {
+        "source_scene_id": source_scene_id,
+        "recommendation_ids": recommendation_ids,
+        "delete_file": delete_file,
+    }
+    return sidecar_post(sidecar_url, "/recommendations/actions/delete-duplicate-scene-group", data, timeout=120)
+
+
+def rec_delete_duplicate_scene_match(sidecar_url, source_scene_id, match_scene_id, recommendation_id, delete_file=False):
+    """Delete one matched duplicate-scene and resolve its grouped review entry."""
+    data = {
+        "source_scene_id": source_scene_id,
+        "match_scene_id": match_scene_id,
+        "recommendation_id": recommendation_id,
+        "delete_file": delete_file,
+    }
+    return sidecar_post(sidecar_url, "/recommendations/actions/delete-duplicate-scene-match", data, timeout=120)
+
+
+def rec_merge_source_into_duplicate_scene_match(sidecar_url, source_scene_id, keeper_match_scene_id, keeper_recommendation_id, other_matches=None):
+    """Merge a grouped duplicate-scene source into one matched scene."""
+    data = {
+        "source_scene_id": source_scene_id,
+        "keeper_match_scene_id": keeper_match_scene_id,
+        "keeper_recommendation_id": keeper_recommendation_id,
+        "other_matches": other_matches or [],
+    }
+    return sidecar_post(sidecar_url, "/recommendations/actions/merge-source-into-duplicate-scene-match", data, timeout=120)
+
+
+def rec_dismiss_duplicate_scene_group(sidecar_url, recommendation_ids, reason=None):
+    """Dismiss all duplicate-scene raw recommendations in a group."""
+    data = {
+        "recommendation_ids": recommendation_ids,
+    }
+    if reason:
+        data["reason"] = reason
+    return sidecar_post(sidecar_url, "/recommendations/actions/dismiss-duplicate-scene-group", data, timeout=60)
+
+
 # ==================== Fingerprint Operations ====================
 
 def fp_status(sidecar_url):
@@ -619,6 +672,73 @@ def handle_recommendations(mode, args, sidecar_url):
         if not scene_id:
             return {"error": "scene_id required"}
         return rec_get_scene(sidecar_url, scene_id)
+
+    elif mode == "rec_merge_duplicate_scene_group":
+        source_scene_id = args.get("source_scene_id")
+        selected_match_scene_ids = args.get("selected_match_scene_ids", [])
+        selected_recommendation_ids = args.get("selected_recommendation_ids", [])
+        unselected_recommendation_ids = args.get("unselected_recommendation_ids", [])
+        if not source_scene_id or not selected_match_scene_ids:
+            return {"error": "source_scene_id and selected_match_scene_ids required"}
+        return rec_merge_duplicate_scene_group(
+            sidecar_url,
+            source_scene_id,
+            selected_match_scene_ids,
+            selected_recommendation_ids,
+            unselected_recommendation_ids,
+        )
+
+    elif mode == "rec_delete_duplicate_scene_group":
+        source_scene_id = args.get("source_scene_id")
+        recommendation_ids = args.get("recommendation_ids", [])
+        delete_file = args.get("delete_file", False)
+        if not source_scene_id or not recommendation_ids:
+            return {"error": "source_scene_id and recommendation_ids required"}
+        return rec_delete_duplicate_scene_group(
+            sidecar_url,
+            source_scene_id,
+            recommendation_ids,
+            delete_file,
+        )
+
+    elif mode == "rec_delete_duplicate_scene_match":
+        source_scene_id = args.get("source_scene_id")
+        match_scene_id = args.get("match_scene_id")
+        recommendation_id = args.get("recommendation_id")
+        delete_file = args.get("delete_file", False)
+        if not source_scene_id or not match_scene_id or recommendation_id is None:
+            return {"error": "source_scene_id, match_scene_id, and recommendation_id required"}
+        return rec_delete_duplicate_scene_match(
+            sidecar_url,
+            source_scene_id,
+            match_scene_id,
+            recommendation_id,
+            delete_file,
+        )
+
+    elif mode == "rec_merge_source_into_duplicate_scene_match":
+        source_scene_id = args.get("source_scene_id")
+        keeper_match_scene_id = args.get("keeper_match_scene_id")
+        keeper_recommendation_id = args.get("keeper_recommendation_id")
+        if not source_scene_id or not keeper_match_scene_id or keeper_recommendation_id is None:
+            return {"error": "source_scene_id, keeper_match_scene_id, and keeper_recommendation_id required"}
+        return rec_merge_source_into_duplicate_scene_match(
+            sidecar_url,
+            source_scene_id,
+            keeper_match_scene_id,
+            keeper_recommendation_id,
+            args.get("other_matches", []),
+        )
+
+    elif mode == "rec_dismiss_duplicate_scene_group":
+        recommendation_ids = args.get("recommendation_ids", [])
+        if not recommendation_ids:
+            return {"error": "recommendation_ids required"}
+        return rec_dismiss_duplicate_scene_group(
+            sidecar_url,
+            recommendation_ids,
+            args.get("reason"),
+        )
 
     elif mode == "rec_update_performer":
         performer_id = args.get("performer_id")

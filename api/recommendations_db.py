@@ -700,6 +700,35 @@ class RecommendationsDB:
 
             return True
 
+    def add_recommendation_target_dismissal(
+        self,
+        rec_id: int,
+        reason: Optional[str] = None,
+        permanent: bool = False,
+    ) -> bool:
+        """Add a recommendation's target to dismissed_targets without changing status."""
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT type, target_type, target_id FROM recommendations WHERE id = ?",
+                (rec_id,),
+            ).fetchone()
+
+            if not row:
+                return False
+
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO dismissed_targets (type, target_type, target_id, reason, permanent)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (row['type'], row['target_type'], row['target_id'], reason, int(permanent))
+                )
+            except sqlite3.IntegrityError:
+                pass
+
+            return True
+
     def batch_dismiss_by_type(self, rec_type: str, permanent: bool = False, reason: Optional[str] = None) -> int:
         """Dismiss all pending recommendations of a given type. Returns count dismissed."""
         with self._connection() as conn:
