@@ -155,6 +155,11 @@ _define("debug_logging_enabled", "Debug Logging",
         "Disable when not actively diagnosing issues.",
         "diagnostics", SettingType.BOOL, fallback=False)
 
+_define("debug_logging_anonymize", "Anonymise Debug Log",
+        "Redact performer names, scene titles, studio names, and file paths from the debug log, "
+        "replacing them with their IDs only. Enable when sharing logs.",
+        "diagnostics", SettingType.BOOL, fallback=False)
+
 
 # ============================================================================
 # Tier defaults

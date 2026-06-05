@@ -329,6 +329,20 @@
    * e.g. "BROWN" -> "Brown", "EYE_COLOR" -> "Eye Color", "NATURAL" -> "Natural"
    * Returns original value if not an ALL_CAPS string.
    */
+  function formatRecTimestamp(isoStr) {
+    if (!isoStr) return '';
+    try {
+      const d = new Date(isoStr.endsWith('Z') ? isoStr : isoStr + 'Z');
+      if (isNaN(d)) return isoStr;
+      return d.toLocaleString(undefined, {
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+      });
+    } catch {
+      return isoStr;
+    }
+  }
+
   function normalizeEnumValue(val) {
     if (typeof val !== 'string') return val;
     // Only transform if the string is ALL_CAPS (with optional underscores)
@@ -462,6 +476,48 @@
 
   // ==================== Dashboard View ====================
 
+  function updateStatusArea(sidecarStatus) {
+    const statusArea = document.getElementById('ss-status-area');
+    if (!statusArea) return;
+    const connected = sidecarStatus?.connected || false;
+    const sidecarVersion = sidecarStatus?.version || null;
+    const pluginVersion = SS.PLUGIN_VERSION || null;
+
+    let versionHtml = '';
+    if (pluginVersion || sidecarVersion) {
+      const showMismatch = pluginVersion && sidecarVersion && pluginVersion !== sidecarVersion;
+      const pVer = pluginVersion ? `Plugin v${pluginVersion}` : '';
+      const sVer = sidecarVersion ? `Sidecar v${sidecarVersion}` : '';
+
+      if (showMismatch) {
+        const pLower = compareSemver(pluginVersion, sidecarVersion) < 0;
+        const pHtml = pVer ? `<span ${pLower ? 'class="ss-version-mismatch"' : ''}>${pVer}</span>` : '';
+        const sHtml = sVer ? `<span ${!pLower ? 'class="ss-version-mismatch"' : ''}>${sVer}</span>` : '';
+        versionHtml = [pHtml, sHtml].filter(Boolean).join(' <span class="ss-status-sep">-</span> ');
+      } else {
+        versionHtml = `<span>${[pVer, sVer].filter(Boolean).join(' - ')}</span>`;
+      }
+    }
+
+    statusArea.className = `ss-app-header-right ${connected ? 'connected' : 'disconnected'}`;
+    statusArea.innerHTML = `
+      ${versionHtml}
+      <span class="ss-status-dot"></span>
+      <span class="ss-status-label">${connected ? 'Connected' : 'Disconnected'}</span>
+      ${sidecarStatus?.error ? `<span class="ss-status-error">${sidecarStatus.error}</span>` : ''}
+    `;
+  }
+
+  function compareSemver(a, b) {
+    const pa = String(a).split('.').map(Number);
+    const pb = String(b).split('.').map(Number);
+    for (let i = 0; i < 3; i++) {
+      const diff = (pa[i] || 0) - (pb[i] || 0);
+      if (diff !== 0) return diff;
+    }
+    return 0;
+  }
+
   async function renderDashboard(mainContainer, content) {
     content.innerHTML = `
       <div class="ss-dashboard-loading">
@@ -471,36 +527,15 @@
     `;
 
     try {
-      const [counts, sidecarStatus, fpStatus, dbInfo, updateInfo] = await Promise.all([
+      const [counts, sidecarStatus] = await Promise.all([
         RecommendationsAPI.getCounts().catch(() => null),
         RecommendationsAPI.getSidecarStatus(),
-        RecommendationsAPI.getFingerprintStatus().catch(() => null),
-        RecommendationsAPI.getDatabaseInfo().catch(() => null),
-        RecommendationsAPI.checkUpdate().catch(() => null),
       ]);
 
       currentState.counts = counts || {};
 
       // Update the persistent status area in the app header
-      const statusArea = document.getElementById('ss-status-area');
-      if (statusArea) {
-        const connected = sidecarStatus?.connected || false;
-        statusArea.className = `ss-app-header-right ${connected ? 'connected' : 'disconnected'}`;
-        statusArea.innerHTML = `
-          <span class="ss-status-dot"></span>
-          <span class="ss-status-label">${connected ? 'Connected' : 'Disconnected'}</span>
-          ${sidecarStatus?.url ? `<span class="ss-status-url">${sidecarStatus.url}</span>` : ''}
-          ${sidecarStatus?.error ? `<span class="ss-status-error">${sidecarStatus.error}</span>` : ''}
-        `;
-      }
-
-      // Build identification database stats
-      const fpCoverage = (fpStatus && fpStatus.complete_fingerprints) || 0;
-      const fpNeedsRefresh = (fpStatus && fpStatus.needs_refresh_count) || 0;
-      const dbVersion = (fpStatus && fpStatus.current_db_version) || dbInfo?.version || 'N/A';
-      const performerCount = dbInfo?.performer_count || 0;
-      const faceCount = dbInfo?.face_count || 0;
-      const tattooCount = dbInfo?.tattoo_embedding_count || 0;
+      updateStatusArea(sidecarStatus);
 
       // Build type cards HTML
       const typeConfigs = {
@@ -547,47 +582,6 @@
       };
 
       content.innerHTML = `
-        <div class="ss-id-database-section">
-          <h2>Identification Database <span id="ss-info-fp"></span></h2>
-          <p class="ss-id-database-desc">Face recognition database used for performer identification and duplicate detection.</p>
-
-          <div class="ss-id-database-stats">
-            <div class="ss-db-stat">
-              <span class="ss-db-stat-value">${dbVersion}</span>
-              <span class="ss-db-stat-label">Version</span>
-              ${updateInfo && updateInfo.update_available ? `
-                <div class="ss-update-badge" id="ss-update-badge">
-                  <span class="ss-update-badge-text">v${updateInfo.latest_version} available</span>
-                </div>
-              ` : ''}
-            </div>
-            <div class="ss-db-stat">
-              <span class="ss-db-stat-value">${performerCount.toLocaleString()}</span>
-              <span class="ss-db-stat-label">Performers</span>
-            </div>
-            <div class="ss-db-stat">
-              <span class="ss-db-stat-value">${faceCount.toLocaleString()}</span>
-              <span class="ss-db-stat-label">Faces</span>
-            </div>
-            ${tattooCount > 0 ? `
-            <div class="ss-db-stat">
-              <span class="ss-db-stat-value">${tattooCount.toLocaleString()}</span>
-              <span class="ss-db-stat-label">Tattoos</span>
-            </div>
-            ` : ''}
-            <div class="ss-db-stat">
-              <span class="ss-db-stat-value">${fpCoverage.toLocaleString()}</span>
-              <span class="ss-db-stat-label">Fingerprints</span>
-            </div>
-            ${fpNeedsRefresh > 0 ? `
-            <div class="ss-db-stat ss-db-stat-warning">
-              <span class="ss-db-stat-value">${fpNeedsRefresh.toLocaleString()}</span>
-              <span class="ss-db-stat-label">Need Refresh</span>
-            </div>
-            ` : ''}
-          </div>
-        </div>
-
         <div class="ss-dashboard-types">
           <div class="ss-section-header">
             <h2>Recommendations</h2>
@@ -598,9 +592,6 @@
         </div>
       `;
 
-      // Add info icons
-      const fpInfoSlot = content.querySelector('#ss-info-fp');
-      if (fpInfoSlot) fpInfoSlot.appendChild(createInfoIcon(() => showHelpModal('Identification Database', HELP_FINGERPRINTS)));
       const typesInfoSlot = content.querySelector('#ss-info-types');
       if (typesInfoSlot) typesInfoSlot.appendChild(createInfoIcon(() => showHelpModal('Recommendations', HELP_REC_TYPES)));
 
@@ -618,6 +609,7 @@
 
         const card = SS.createElement('div', {
           className: 'ss-type-card',
+          attrs: { 'data-type': type },
           innerHTML: `
             <div class="ss-type-card-header">
               <span class="ss-type-icon">${config.icon}</span>
@@ -658,15 +650,7 @@
       }
 
     } catch (e) {
-      // Update status to show disconnected
-      const statusArea = document.getElementById('ss-status-area');
-      if (statusArea) {
-        statusArea.className = 'ss-app-header-right disconnected';
-        statusArea.innerHTML = `
-          <span class="ss-status-dot"></span>
-          <span class="ss-status-label">Disconnected</span>
-        `;
-      }
+      updateStatusArea({ connected: false, error: e.message });
 
       content.innerHTML = `
         <div class="ss-error-state">
@@ -1223,6 +1207,12 @@
 
       for (const rec of result.recommendations) {
         const card = renderRecommendationCard(rec);
+        if (rec.status !== 'pending' && rec.updated_at) {
+          const dateBadge = document.createElement('div');
+          dateBadge.className = 'ss-rec-date-badge';
+          dateBadge.textContent = formatRecTimestamp(rec.updated_at);
+          card.appendChild(dateBadge);
+        }
         card.addEventListener('click', () => {
           currentState.selectedRec = rec;
           currentState.view = 'detail';
@@ -5472,10 +5462,40 @@
     console.log(`[${SS.PLUGIN_NAME}] Recommendations module loaded`);
   }
 
+  // Refresh type-card counts on the dashboard without a full re-render.
+  // Called by the settings module when switching back to the recommendations tab.
+  async function refreshCounts() {
+    try {
+      const countsResult = await RecommendationsAPI.getCounts();
+      if (!countsResult) return;
+      currentState.counts = countsResult;
+
+      // Update total pending badge
+      const badge = document.querySelector('#ss-recommendations .ss-section-header .ss-count-badge');
+      if (badge) badge.textContent = countsResult.total_pending ?? '';
+
+      // Update per-type count numbers on each card
+      const typeCards = document.querySelectorAll('#ss-recommendations .ss-type-card[data-type]');
+      typeCards.forEach(card => {
+        const type = card.dataset.type;
+        const typeCounts = countsResult.counts?.[type] || {};
+        const pendingEl = card.querySelector('.ss-count-pending .ss-count-number');
+        const resolvedEl = card.querySelector('.ss-count-resolved .ss-count-number');
+        const dismissedEl = card.querySelector('.ss-count-dismissed .ss-count-number');
+        if (pendingEl) pendingEl.textContent = typeCounts.pending ?? 0;
+        if (resolvedEl) resolvedEl.textContent = typeCounts.resolved ?? 0;
+        if (dismissedEl) dismissedEl.textContent = typeCounts.dismissed ?? 0;
+      });
+    } catch (e) {
+      // Ignore errors — this is a best-effort refresh
+    }
+  }
+
   // Export for testing/debugging
   window.StashSenseRecommendations = {
     API: RecommendationsAPI,
     getState: () => currentState,
+    refreshCounts,
     init,
   };
 

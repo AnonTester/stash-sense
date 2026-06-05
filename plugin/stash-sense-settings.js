@@ -38,6 +38,15 @@
     async getSystemInfo() {
       return apiCall('system_info');
     },
+    async getDatabaseInfo() {
+      return apiCall('database_info');
+    },
+    async getFingerprintStatus() {
+      return apiCall('fp_status');
+    },
+    async checkUpdate() {
+      return apiCall('db_check_update');
+    },
   };
 
   // ==================== State ====================
@@ -104,6 +113,9 @@
       container.appendChild(renderHardwareBanner(systemInfo));
     }
 
+    // Identification Database section (above models)
+    container.appendChild(await renderIdDatabaseSection());
+
     // Models section
     container.appendChild(await renderModelsCategory());
 
@@ -129,6 +141,79 @@
 
     // Job Schedules section
     await renderSchedulesCategory(container);
+  }
+
+  async function renderIdDatabaseSection() {
+    const section = SS.createElement('div', { className: 'ss-settings-category ss-id-database-settings-section' });
+    section.innerHTML = `
+      <div class="ss-settings-cat-header">
+        <h2 class="ss-settings-cat-title">Identification Database</h2>
+        <p class="ss-settings-cat-desc">Face recognition database used for performer identification and duplicate detection.</p>
+      </div>
+      <div class="ss-settings-cat-body">
+        <div class="ss-id-database-stats ss-id-database-loading">
+          <div class="ss-spinner" style="width:16px;height:16px;margin:0 auto;"></div>
+        </div>
+      </div>
+    `;
+
+    const statsEl = section.querySelector('.ss-id-database-stats');
+
+    try {
+      const [fpStatus, dbInfo, updateInfo] = await Promise.all([
+        SettingsAPI.getFingerprintStatus().catch(() => null),
+        SettingsAPI.getDatabaseInfo().catch(() => null),
+        SettingsAPI.checkUpdate().catch(() => null),
+      ]);
+
+      const fpCoverage = (fpStatus && fpStatus.complete_fingerprints) || 0;
+      const fpNeedsRefresh = (fpStatus && fpStatus.needs_refresh_count) || 0;
+      const dbVersion = (fpStatus && fpStatus.current_db_version) || dbInfo?.version || 'N/A';
+      const performerCount = dbInfo?.performer_count || 0;
+      const faceCount = dbInfo?.face_count || 0;
+      const tattooCount = dbInfo?.tattoo_embedding_count || 0;
+
+      statsEl.className = 'ss-id-database-stats';
+      statsEl.innerHTML = `
+        <div class="ss-db-stat">
+          <span class="ss-db-stat-value">${dbVersion}</span>
+          <span class="ss-db-stat-label">Version</span>
+          ${updateInfo && updateInfo.update_available ? `
+            <div class="ss-update-badge">
+              <span class="ss-update-badge-text">v${updateInfo.latest_version} available</span>
+            </div>
+          ` : ''}
+        </div>
+        <div class="ss-db-stat">
+          <span class="ss-db-stat-value">${performerCount.toLocaleString()}</span>
+          <span class="ss-db-stat-label">Performers</span>
+        </div>
+        <div class="ss-db-stat">
+          <span class="ss-db-stat-value">${faceCount.toLocaleString()}</span>
+          <span class="ss-db-stat-label">Faces</span>
+        </div>
+        ${tattooCount > 0 ? `
+        <div class="ss-db-stat">
+          <span class="ss-db-stat-value">${tattooCount.toLocaleString()}</span>
+          <span class="ss-db-stat-label">Tattoos</span>
+        </div>
+        ` : ''}
+        <div class="ss-db-stat">
+          <span class="ss-db-stat-value">${fpCoverage.toLocaleString()}</span>
+          <span class="ss-db-stat-label">Fingerprints</span>
+        </div>
+        ${fpNeedsRefresh > 0 ? `
+        <div class="ss-db-stat ss-db-stat-warning">
+          <span class="ss-db-stat-value">${fpNeedsRefresh.toLocaleString()}</span>
+          <span class="ss-db-stat-label">Need Refresh</span>
+        </div>
+        ` : ''}
+      `;
+    } catch (e) {
+      statsEl.innerHTML = `<span style="color:#888;font-size:13px;">Failed to load: ${e.message}</span>`;
+    }
+
+    return section;
   }
 
   function renderHardwareBanner(info) {
@@ -1367,6 +1452,11 @@
         if (tabName === 'settings' && !settingsPanel.dataset.loaded) {
           settingsPanel.dataset.loaded = 'true';
           renderSettings(settingsPanel);
+        }
+
+        // Refresh recommendation counters when switching back to that tab
+        if (tabName === 'recommendations' && window.StashSenseRecommendations) {
+          window.StashSenseRecommendations.refreshCounts();
         }
       });
     }

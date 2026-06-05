@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
@@ -27,6 +28,37 @@ _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # Held so we can remove it later
 _debug_handler: Optional[logging.Handler] = None
+
+# Patterns that match name/path fields followed by their numeric ID.
+# Each tuple is (compiled_pattern, replacement_template).
+# The replacement keeps the ID but drops the human-readable name/path.
+_ANON_PATTERNS: list[tuple[re.Pattern, str]] = [
+    # 'Scene Title' (id 123) → scene_id=123
+    (re.compile(r"'[^']{1,200}'\s*\((?:scene[_ ]?)?id[=:\s]+(\d+)\)", re.IGNORECASE), r"scene_id=\1"),
+    # performer 'Name' (id 123) → performer_id=123
+    (re.compile(r"performer\s+'[^']{1,200}'\s*(?:\(id[=:\s]+(\d+)\))?", re.IGNORECASE), r"performer_id=\1"),
+    # studio 'Name' → studio_id=NNN  (name without id — just redact name)
+    (re.compile(r"studio\s+'[^']{1,200}'", re.IGNORECASE), r"studio '<redacted>'"),
+    # file paths: /some/path/file.ext → <path redacted>
+    (re.compile(r"/[^\s,;\"']{4,200}\.\w{2,5}\b"), r"<file redacted>"),
+    # Windows paths
+    (re.compile(r"[A-Za-z]:\\[^\s,;\"']{4,200}\.\w{2,5}\b"), r"<file redacted>"),
+]
+
+
+class _AnonymizingFormatter(logging.Formatter):
+    """Formatter that strips PII (names, paths) from log messages."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        original = record.getMessage()
+        cleaned = original
+        for pattern, replacement in _ANON_PATTERNS:
+            cleaned = pattern.sub(replacement, cleaned)
+        if cleaned != original:
+            record = logging.makeLogRecord(record.__dict__)
+            record.msg = cleaned
+            record.args = ()
+        return super().format(record)
 
 
 class _CompoundRotatingHandler(RotatingFileHandler):
@@ -44,7 +76,7 @@ class _CompoundRotatingHandler(RotatingFileHandler):
         return super().shouldRollover(record)
 
 
-def configure_debug_logging(enabled: bool, data_dir: Path) -> None:
+def configure_debug_logging(enabled: bool, data_dir: Path, anonymize: bool = False) -> None:
     """Add or remove the debug file handler on the root logger.
 
     Safe to call multiple times — removes any previously added handler
@@ -54,6 +86,7 @@ def configure_debug_logging(enabled: bool, data_dir: Path) -> None:
         enabled: True to activate, False to deactivate.
         data_dir: The sidecar data directory (``DATA_DIR`` env var path).
                   Logs are written to ``data_dir/logs/``.
+        anonymize: If True, apply PII redaction (names, paths → IDs only).
     """
     global _debug_handler
 
@@ -86,7 +119,8 @@ def configure_debug_logging(enabled: bool, data_dir: Path) -> None:
         delay=False,
     )
     handler.setLevel(logging.DEBUG)
-    handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_DATE_FORMAT))
+    fmt_cls = _AnonymizingFormatter if anonymize else logging.Formatter
+    handler.setFormatter(fmt_cls(_LOG_FORMAT, datefmt=_DATE_FORMAT))
 
     # Clamp all existing console/stream handlers to WARNING so that
     # lowering the root level below WARNING doesn't flood stdout.
@@ -102,6 +136,6 @@ def configure_debug_logging(enabled: bool, data_dir: Path) -> None:
 
     _debug_handler = handler
     logger.warning(
-        "Debug logging enabled → %s (max %d MB, %d backups)",
-        log_path, _MAX_BYTES // (1024 * 1024), _BACKUP_COUNT,
+        "Debug logging enabled → %s (max %d MB, %d backups, anonymize=%s)",
+        log_path, _MAX_BYTES // (1024 * 1024), _BACKUP_COUNT, anonymize,
     )

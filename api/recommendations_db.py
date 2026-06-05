@@ -568,9 +568,11 @@ class RecommendationsDB:
             query += " AND target_type = ?"
             params.append(target_type)
 
-        # Confidence-ranked recommendation types are reviewed primarily by confidence.
-        # Keep this ordering stable across pending/resolved/dismissed groups.
-        if type == "scene_fingerprint_match":
+        # Dismissed/resolved items are reviewed by recency, not confidence.
+        # Pending items on confidence-ranked types are sorted by confidence.
+        if status in ("dismissed", "resolved"):
+            query += " ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?"
+        elif type == "scene_fingerprint_match":
             query += (
                 " ORDER BY COALESCE(json_extract(details, '$.high_confidence'), 0) DESC, "
                 "COALESCE(confidence, 0) DESC, created_at DESC, id DESC LIMIT ? OFFSET ?"

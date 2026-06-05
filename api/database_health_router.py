@@ -65,6 +65,7 @@ class HealthResponse(BaseModel):
     database_loaded: bool
     performer_count: int = 0
     face_count: int = 0
+    version: Optional[str] = None
 
 
 class CheckUpdateResponse(BaseModel):
@@ -102,10 +103,14 @@ async def health_check():
     side effects. The face recognition database loads on first
     /identify request.
     """
+    from main import app as _app
+    _version = getattr(_app, "version", None)
+
     if _recognizer is None:
         return HealthResponse(
             status="degraded",
             database_loaded=False,
+            version=_version,
         )
 
     return HealthResponse(
@@ -113,6 +118,7 @@ async def health_check():
         database_loaded=True,
         performer_count=len(_recognizer.performers),
         face_count=len(_recognizer.faces),
+        version=_version,
     )
 
 

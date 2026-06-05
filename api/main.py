@@ -354,7 +354,10 @@ async def lifespan(app: FastAPI):
     # Apply debug logging if enabled in settings
     from debug_logging import configure_debug_logging
     if settings_mgr.get("debug_logging_enabled"):
-        configure_debug_logging(True, data_dir)
+        configure_debug_logging(
+            True, data_dir,
+            anonymize=bool(settings_mgr.get("debug_logging_anonymize")),
+        )
 
     # Initialize queue manager
     from queue_manager import QueueManager
@@ -400,7 +403,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Stash Sense API",
     description="Face recognition and recommendations engine for Stash",
-    version="0.4.0",
+    version="0.5.0",
     lifespan=lifespan,
 )
 

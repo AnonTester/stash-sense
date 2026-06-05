@@ -20,7 +20,7 @@ router = APIRouter(tags=["settings"])
 
 # Set at startup
 _start_time: Optional[float] = None
-_version: str = "0.4.0"
+_version: str = "0.5.0"
 
 
 def init_settings_router():
@@ -31,11 +31,14 @@ def init_settings_router():
 
 def _apply_setting_side_effects(key: str, value: Any) -> None:
     """Apply runtime side-effects for settings that need them."""
-    if key == "debug_logging_enabled":
+    if key in ("debug_logging_enabled", "debug_logging_anonymize"):
         from debug_logging import configure_debug_logging
         from main import DATA_DIR
         from pathlib import Path
-        configure_debug_logging(bool(value), Path(DATA_DIR))
+        mgr = get_settings_manager()
+        enabled = bool(value) if key == "debug_logging_enabled" else bool(mgr.get("debug_logging_enabled"))
+        anonymize = bool(value) if key == "debug_logging_anonymize" else bool(mgr.get("debug_logging_anonymize"))
+        configure_debug_logging(enabled, Path(DATA_DIR), anonymize=anonymize)
 
 
 # ==================== Request/Response models ====================

@@ -1,5 +1,31 @@
 ## 2026-06-05
 
+### 0.5.0
+- Fix: Dismissed and Resolved recommendation tabs now sort by date/time newest
+  first instead of confidence. Date/time of dismissal or resolution is shown on
+  each card.
+- Fix: Top-level Recommendations/Operations/Settings tabs no longer break
+  mobile layouts. The tab bar now scrolls horizontally without wrapping.
+- Feature: Counter badges on the recommendations dashboard now refresh
+  automatically when switching back from the Operations or Settings tab, without
+  requiring a full page reload.
+- UI: Identification Database info card moved from the Recommendations tab to
+  the Settings tab (above the Models section) where it fits better alongside
+  other sidecar/database management controls.
+- Feature: Plugin version and sidecar version are now shown in the header next
+  to the connection status (e.g. "Plugin v0.5.0 - Sidecar v0.5.0 * Connected").
+  When the two versions differ, the older version is highlighted in red to
+  indicate a mismatch. The endpoint URL has been removed from the header.
+- Feature: New "Anonymise Debug Log" setting (Settings → Diagnostics). When
+  enabled alongside Debug Logging, redacts performer names, scene titles, studio
+  names, and file paths from the debug log — showing IDs only. Useful for
+  sharing logs without exposing library content.
+- Note: The Scene Stash-Box Tagger always runs as a full scan when triggered
+  manually. This deletes any previously pending recommendations before scanning,
+  so if no new matches are found the list appears empty. Previously pending items
+  are not dismissed or resolved — they are removed and replaced by the new scan
+  results.
+
 ### 0.4.0
 - Fix: GitHub API rate limit errors on Docker crash-loops. The database update
   check now uses a persistent 12-hour cache (data/.update_check_cache.json)
@@ -19,3 +45,119 @@
 - Feature: Fingerprint generation emits detailed DEBUG log entries (scene
   skip reasons, per-batch statistics, offset tracking) to assist with
   diagnosing the progress-reset loop reported with 3700+ scene libraries.
+
+## 2026-06-02
+
+### 0.3.0
+- Feature: Grouped duplicate scene UI. Duplicate scenes are now displayed in
+  collapsible groups for clearer organization and easier navigation.
+- Fix: Removed "Upstream Changes: " prefix from recommendation titles for
+  cleaner display.
+- Fix: Local studio now correctly shown in upstream scene changes
+  recommendations.
+
+## 2026-06-01
+
+- Feature: Server-side linked selection replaces JavaScript cache-driven
+  approach for better consistency and performance.
+- Feature: Improved linked pre-selection to intelligently suggest related
+  items.
+- Fix: Added stale-scene validation in both backend and UI to prevent stale
+  recommendations.
+- Fix: Performer link option visibility restored in existing recommendations.
+- Feature: Added performer link option to upstream scene changes
+  recommendations with alias check support.
+- Fix: Database cleanup for duplicate checks to improve query performance.
+
+## 2026-05-23
+
+- Fix: Regression of duplicate scene sort order (high confidence scenes now
+  properly sorted at top).
+
+## 2026-05-20
+
+- Fix: Hardened force-full rescan on manual stash-box tagger job to prevent
+  inconsistent state.
+
+## 2026-05-19
+
+- Feature: Added studio and performer links on stash-box tagger and duplicate
+  details pages for easier reference.
+- Improvement: Task progress updates now more accurately reflect job state;
+  fixed stash-box tagger to skip scenes where stashid already present.
+
+## 2026-05-18
+
+- Fix: Duplicate scene merge query error causing merge failures.
+- Fix: Force full rescan on manual stash-box tagger run to ensure up-to-date
+  suggestions. Sort high confidence matches at top and remove zero-evidence
+  false suggestions.
+
+## 2026-05-17
+
+### 0.2.0
+- Feature: Added support for merged and deleted performers in upstream
+  performer sync workflow.
+- Improvement: Prevent replacement performers from being hidden in scene
+  recommendations.
+- Feature: Added option to accept all tag-only changes in upstream sync.
+  Options now broadened to accept URL and/or code changes alongside tags.
+- Fix: Local studio lookup now correctly resolves in upstream sync.
+- Fix: Progress no longer stalls when adding job to queue.
+- Fix: Removed "add old name as alias" option from scene title changes
+  (unsupported by Stash API).
+- Improvement: Treat 'null' values as empty for change comparison to reduce
+  false positives.
+
+## 2026-05-16
+
+- Feature: Display scene preview, cover image, local scene link, and stashbox
+  link in stash-box tagger details for context.
+- Improvement: Show high confidence stash-box tagger results at top; added
+  detailed description of matching method to help users understand confidence
+  scores.
+- Feature: Added missing libgles2 dependency to Dockerfile for full graphics
+  support.
+- Fix: Address deprecated InsightFace estimate calls (norm_crop and general
+  estimate function).
+- Feature: Close modal and insert performer automatically after adding from
+  face recognition.
+- Feature: Show details and photos of other matches in face search results
+  for comparison.
+
+## 2026-05-16 (earlier)
+
+- Fix: Showing upstream tag changes when they are the same locally (false
+  positives eliminated).
+- Feature: Force upstream scene change re-scan on manual trigger; adjusted
+  history view on operations tab.
+- Fix: Error creating already existing tags now handled gracefully.
+- Improvement: Check for stale tags/studio/performer in sync recommendation;
+  added duplicate studio fix.
+- Improvement: Tag suggestion now respects tag aliases and suppresses linked
+  local tags to reduce redundancy.
+- Fix: Stop treating performer alias differences as scene changes (Stash app
+  does not support scene performer aliases).
+
+## 2026-05-15
+
+- Improvement: Show high confidence results at top of stash-box tagger
+  results; added more details to local scene card.
+
+## 2026-05-14
+
+### 0.1.3
+- Feature: Added gender setting for upstream sync to properly handle performer
+  gender in field comparisons.
+- Feature: Stash-box tagger now only matches unlinked scenes and
+  auto-dismisses other pending matches for the same local scene to avoid
+  duplicate work.
+- Improvement: Force stash-box tagger re-scan on manual trigger to get fresh
+  results.
+- Improvement: Adjust progress update of upstream changes and fix stash-box
+  tagger job state handling.
+
+## 2026-05-14 (earlier)
+
+- Feature: Scene preview, cover, local scene link and stashbox link added to
+  stash-box tagger details view.
