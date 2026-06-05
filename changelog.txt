@@ -1,5 +1,13 @@
 ## 2026-06-05
 
+### 0.5.6
+- Fix: Duplicate Scene File Detection (and all other analyzers) no longer crash
+  with "'utf-8' codec can't decode byte" when the Stash library contains files
+  whose paths include non-UTF-8 characters (e.g. Latin-1 accented filenames like
+  'é'). The Stash GraphQL client now decodes HTTP responses with errors='replace'
+  instead of strict UTF-8, so a handful of garbled characters in a file path no
+  longer aborts the entire request.
+
 ### 0.5.5
 - Fix: Fingerprint generation crash loop now fully resolved. The previous fix
   wrote an error record only inside Python exception handlers, which do not run

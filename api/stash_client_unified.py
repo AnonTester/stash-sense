@@ -11,6 +11,7 @@ All async requests go through the rate limiter to prevent overwhelming Stash.
 """
 
 import httpx
+import json
 import logging
 from typing import Optional
 
@@ -46,7 +47,7 @@ class StashClientUnified:
             response = client.post(self.graphql_url, json=payload, headers=self.headers)
             response.raise_for_status()
 
-            result = response.json()
+            result = json.loads(response.content.decode("utf-8", errors="replace"))
             if "errors" in result:
                 raise RuntimeError(f"GraphQL error: {result['errors']}")
 
@@ -88,14 +89,16 @@ class StashClientUnified:
             if not response.is_success:
                 # Include response body in error for debugging
                 try:
-                    body = response.json()
+                    body = json.loads(response.content.decode("utf-8", errors="replace"))
                 except Exception:
-                    body = response.text  # Response not JSON, use raw text
+                    body = response.content.decode("utf-8", errors="replace")
                 raise RuntimeError(
                     f"Stash API error (HTTP {response.status_code}): {body}"
                 )
 
-            result = response.json()
+            # Decode with errors='replace' so non-UTF-8 bytes in file paths
+            # (e.g. Latin-1 filenames like 0xe9 for 'é') don't crash the client.
+            result = json.loads(response.content.decode("utf-8", errors="replace"))
             if "errors" in result:
                 raise RuntimeError(f"GraphQL error: {result['errors']}")
 
