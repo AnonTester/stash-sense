@@ -44,7 +44,8 @@ logger = logging.getLogger(__name__)
 
 GITHUB_REPO = "carrotwaxr/stash-sense-data"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-CACHE_TTL_SECONDS = 600  # 10 minutes
+CACHE_TTL_SECONDS = 600          # 10 minutes — in-memory short-term cache
+PERSISTENT_CACHE_TTL = 43_200   # 12 hours — survives Docker restarts
 
 # Files that may appear in a release zip.
 RELEASE_FILES = {
@@ -124,9 +125,12 @@ class DatabaseUpdater:
         self._state = UpdateState()
         self._state.current_version = self._get_current_version()
 
-        # GitHub API response cache
+        # GitHub API response cache — in-memory (lost on restart)
         self._cache: Optional[dict[str, Any]] = None
         self._cache_time: float = 0.0
+
+        # Persistent cache file — survives Docker restarts
+        self._persistent_cache_file = data_dir / ".update_check_cache.json"
 
         # Background task handle
         self._update_task: Optional[asyncio.Task] = None
@@ -155,15 +159,56 @@ class DatabaseUpdater:
     # Check for updates (GitHub API)
     # ------------------------------------------------------------------
 
-    async def check_update(self) -> dict[str, Any]:
+    # ------------------------------------------------------------------
+    # Persistent cache helpers
+    # ------------------------------------------------------------------
+
+    def _load_persistent_cache(self) -> Optional[dict[str, Any]]:
+        """Return the cached check result if it is still within 12 hours."""
+        try:
+            with open(self._persistent_cache_file) as f:
+                data = json.load(f)
+            checked_at: float = data.get("checked_at", 0.0)
+            if (time.time() - checked_at) < PERSISTENT_CACHE_TTL:
+                return data.get("result")
+        except (OSError, json.JSONDecodeError, KeyError):
+            pass
+        return None
+
+    def _save_persistent_cache(self, result: dict[str, Any]) -> None:
+        """Write the check result to disk with the current timestamp."""
+        try:
+            payload = {"checked_at": time.time(), "result": result}
+            self._persistent_cache_file.write_text(json.dumps(payload))
+        except OSError as exc:
+            logger.warning("Could not write update check cache: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Check for updates (GitHub API)
+    # ------------------------------------------------------------------
+
+    async def check_update(self, force: bool = False) -> dict[str, Any]:
         """Query the latest GitHub release tag and compare to local version.
 
-        The response is cached for ``CACHE_TTL_SECONDS`` to avoid
-        rate-limiting.
+        Caching strategy (to avoid GitHub API rate limits on crash-loops):
+        - Persistent file cache (12 h) — survives Docker restarts.
+        - In-memory cache (10 min) — avoids redundant disk reads.
+        - ``force=True`` — bypasses both caches (used by the manual UI action).
         """
-        now = time.monotonic()
-        if self._cache is not None and (now - self._cache_time) < CACHE_TTL_SECONDS:
-            return self._cache
+        if not force:
+            # Fast path: in-memory cache
+            now = time.monotonic()
+            if self._cache is not None and (now - self._cache_time) < CACHE_TTL_SECONDS:
+                return self._cache
+
+            # Persistent cache — survives container restarts
+            persistent = self._load_persistent_cache()
+            if persistent is not None:
+                # Refresh the in-memory cache from disk so subsequent calls
+                # within the same process don't hit the file again.
+                self._cache = persistent
+                self._cache_time = time.monotonic()
+                return persistent
 
         async with httpx.AsyncClient() as client:
             resp = await client.get(GITHUB_API_URL, follow_redirects=True)
@@ -196,8 +241,10 @@ class DatabaseUpdater:
             "published_at": release.get("published_at"),
         }
 
+        # Update both caches
         self._cache = result
         self._cache_time = time.monotonic()
+        self._save_persistent_cache(result)
         return result
 
     # ------------------------------------------------------------------
@@ -264,9 +311,12 @@ class DatabaseUpdater:
             self._state.progress_pct = 100
             self._state.current_version = target_version
 
-            # Invalidate the check_update cache so the next poll reflects
-            # the new version.
+            # Invalidate both caches so the next poll reflects the new version.
             self._cache = None
+            try:
+                self._persistent_cache_file.unlink(missing_ok=True)
+            except OSError:
+                pass
 
             logger.warning("Database update to %s complete", target_version)
 

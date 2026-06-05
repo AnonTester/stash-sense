@@ -23,7 +23,7 @@ Usage:
 
 import httpx
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional, AsyncIterator
 from enum import Enum
 
@@ -59,6 +59,9 @@ class GeneratorProgress:
     current_scene_id: Optional[int] = None
     current_scene_title: Optional[str] = None
     error_message: Optional[str] = None
+    # Cursor support: set at the end of each batch so the job can checkpoint.
+    batch_completed: bool = False   # True only on the extra yield after a full batch
+    current_offset: int = 0         # Pagination offset after this batch
 
     @property
     def progress_pct(self) -> float:
@@ -102,6 +105,7 @@ class SceneFingerprintGenerator:
     - Respects rate limiting
     - Can be stopped gracefully
     - Skips scenes with up-to-date fingerprints
+    - Supports cursor-based resumption via start_offset / start_processed
     """
 
     def __init__(
@@ -156,6 +160,8 @@ class SceneFingerprintGenerator:
         self,
         refresh_outdated: bool = True,
         batch_size: int = 100,
+        start_offset: int = 0,
+        start_processed: int = 0,
     ) -> AsyncIterator[GeneratorProgress]:
         """
         Generate fingerprints for all scenes that need them.
@@ -163,23 +169,42 @@ class SceneFingerprintGenerator:
         Args:
             refresh_outdated: Also regenerate fingerprints from older DB versions
             batch_size: Number of scenes to query at a time
+            start_offset: Resume pagination from this offset (0 = start fresh)
+            start_processed: Cumulative processed count before this run (from cursor)
 
         Yields:
-            GeneratorProgress after each scene is processed
+            GeneratorProgress after each scene and once more at each batch boundary
+            (batch_completed=True) so the job can save a resumption cursor.
         """
         self._status = GeneratorStatus.RUNNING
         self._progress.status = GeneratorStatus.RUNNING
         self._stop_requested = False
+        self._progress.processed_scenes = start_processed
+        self._progress.current_offset = start_offset
+
+        resuming = start_offset > 0 or start_processed > 0
 
         try:
             # Get total scene count
             _, total = await self.stash.get_scenes_for_fingerprinting(limit=1, offset=0)
             self._progress.total_scenes = total
 
-            logger.info(f"Starting fingerprint generation for up to {total} scenes")
+            if resuming:
+                logger.warning(
+                    "Fingerprint generation resuming from offset %d "
+                    "(previously processed: %d / %d, db_version=%s)",
+                    start_offset, start_processed, total, self.db_version,
+                )
+            else:
+                logger.warning(
+                    "Fingerprint generation starting: %d total scenes, db_version=%s, "
+                    "refresh_outdated=%s, batch_size=%d",
+                    total, self.db_version, refresh_outdated, batch_size,
+                )
+
             yield self._progress
 
-            offset = 0
+            offset = start_offset
             while offset < total and not self._stop_requested:
                 # Fetch batch of scenes
                 scenes, _ = await self.stash.get_scenes_for_fingerprinting(
@@ -188,26 +213,60 @@ class SceneFingerprintGenerator:
                 )
 
                 if not scenes:
+                    logger.debug(
+                        "Batch at offset=%d returned no scenes (total=%d); stopping.",
+                        offset, total,
+                    )
                     break
+
+                batch_successful = 0
+                batch_failed = 0
+                batch_skipped = 0
+
+                logger.debug(
+                    "Processing batch: offset=%d, scenes_in_batch=%d, "
+                    "cumulative_processed=%d/%d (%.1f%%)",
+                    offset, len(scenes),
+                    self._progress.processed_scenes, total,
+                    self._progress.progress_pct,
+                )
 
                 for scene in scenes:
                     if self._stop_requested:
                         break
 
                     scene_id = int(scene["id"])
+                    scene_title = scene.get("title") or f"Scene {scene_id}"
                     self._progress.current_scene_id = scene_id
-                    self._progress.current_scene_title = scene.get("title", f"Scene {scene_id}")
+                    self._progress.current_scene_title = scene_title
+                    self._progress.batch_completed = False
 
                     # Check if we need to process this scene
                     existing = self.rec_db.get_scene_fingerprint(scene_id)
                     if existing:
                         if existing.get("fingerprint_status") == "complete":
                             if not refresh_outdated or existing.get("db_version") == self.db_version:
-                                # Already up to date
+                                logger.debug(
+                                    "Scene %d (%s): skipped — already fingerprinted "
+                                    "(db_version=%s, current=%s)",
+                                    scene_id, scene_title,
+                                    existing.get("db_version"), self.db_version,
+                                )
                                 self._progress.skipped += 1
                                 self._progress.processed_scenes += 1
+                                batch_skipped += 1
                                 yield self._progress
                                 continue
+
+                        logger.debug(
+                            "Scene %d (%s): re-fingerprinting "
+                            "(status=%s, db_version=%s → %s)",
+                            scene_id, scene_title,
+                            existing.get("fingerprint_status"),
+                            existing.get("db_version"), self.db_version,
+                        )
+                    else:
+                        logger.debug("Scene %d (%s): no existing fingerprint", scene_id, scene_title)
 
                     # Generate fingerprint by calling /identify/scene
                     result = await self._identify_scene(scene_id)
@@ -215,35 +274,85 @@ class SceneFingerprintGenerator:
                     self._progress.processed_scenes += 1
                     if result.success:
                         self._progress.successful += 1
+                        batch_successful += 1
+                        logger.debug(
+                            "Scene %d (%s): fingerprinted — performers_found=%d, frames=%d",
+                            scene_id, scene_title,
+                            result.performers_found, result.frames_analyzed,
+                        )
                     else:
                         self._progress.failed += 1
+                        batch_failed += 1
+                        logger.debug(
+                            "Scene %d (%s): fingerprint failed — %s",
+                            scene_id, scene_title, result.error,
+                        )
 
                     yield self._progress
 
                 offset += batch_size
+                self._progress.current_offset = offset
+
+                logger.debug(
+                    "Batch complete: offset_now=%d, "
+                    "batch_ok=%d skipped=%d failed=%d | "
+                    "total processed=%d/%d (%.1f%%)",
+                    offset,
+                    batch_successful, batch_skipped, batch_failed,
+                    self._progress.processed_scenes, total,
+                    self._progress.progress_pct,
+                )
+
+                # Yield once more with batch_completed=True so the job can
+                # save a resumption cursor without writing per-scene.
+                self._progress.batch_completed = True
+                self._progress.current_scene_id = None
+                self._progress.current_scene_title = None
+                yield self._progress
+                self._progress.batch_completed = False
 
             if self._stop_requested:
                 self._status = GeneratorStatus.PAUSED
                 self._progress.status = GeneratorStatus.PAUSED
-                logger.info(f"Generation paused at scene {self._progress.processed_scenes}/{total}")
+                logger.warning(
+                    "Fingerprint generation paused at offset %d "
+                    "(%d/%d processed, %d ok, %d skipped, %d failed)",
+                    offset,
+                    self._progress.processed_scenes, total,
+                    self._progress.successful,
+                    self._progress.skipped,
+                    self._progress.failed,
+                )
             else:
                 self._status = GeneratorStatus.COMPLETED
                 self._progress.status = GeneratorStatus.COMPLETED
-                logger.info(
-                    f"Generation complete: {self._progress.successful} successful, "
-                    f"{self._progress.failed} failed, {self._progress.skipped} skipped"
+                logger.warning(
+                    "Fingerprint generation complete: %d/%d processed "
+                    "(%d successful, %d skipped, %d failed), db_version=%s",
+                    self._progress.processed_scenes, total,
+                    self._progress.successful,
+                    self._progress.skipped,
+                    self._progress.failed,
+                    self.db_version,
                 )
 
         except Exception as e:
             self._status = GeneratorStatus.ERROR
             self._progress.status = GeneratorStatus.ERROR
             self._progress.error_message = str(e)
-            logger.error("Generation error: %s", e, exc_info=True)
+            logger.error(
+                "Fingerprint generation error at offset ~%d (%d processed so far): %s",
+                self._progress.current_offset,
+                self._progress.processed_scenes,
+                e,
+                exc_info=True,
+            )
             raise
 
         finally:
             self._progress.current_scene_id = None
             self._progress.current_scene_title = None
+            self._progress.batch_completed = False
             yield self._progress
 
     async def generate_for_scene(self, scene_id: int) -> FingerprintResult:

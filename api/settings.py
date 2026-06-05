@@ -55,6 +55,7 @@ CATEGORIES = {
     "recognition": {"label": "Recognition", "order": 2},
     "signals": {"label": "Signals", "order": 3},
     "upstream_sync": {"label": "Upstream Sync", "order": 4},
+    "diagnostics": {"label": "Diagnostics", "order": 5},
 }
 
 
@@ -146,6 +147,13 @@ _define("upstream_scene_gender_non_binary_enabled", "Non-Binary",
 _define("upstream_scene_gender_unknown_enabled", "Unknown",
         "Include performers with unknown or missing gender when detecting upstream scene performer changes",
         "upstream_sync", SettingType.BOOL, fallback=True)
+
+# -- Diagnostics --
+_define("debug_logging_enabled", "Debug Logging",
+        "Write verbose DEBUG-level logs to data/logs/stash_sense_debug.log. "
+        "Rotates when the file exceeds 5 MB or at midnight, keeping at most 10 files. "
+        "Disable when not actively diagnosing issues.",
+        "diagnostics", SettingType.BOOL, fallback=False)
 
 
 # ============================================================================

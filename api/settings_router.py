@@ -20,13 +20,22 @@ router = APIRouter(tags=["settings"])
 
 # Set at startup
 _start_time: Optional[float] = None
-_version: str = "0.3.0"
+_version: str = "0.4.0"
 
 
 def init_settings_router():
     """Record startup time. Called once during lifespan."""
     global _start_time
     _start_time = time.monotonic()
+
+
+def _apply_setting_side_effects(key: str, value: Any) -> None:
+    """Apply runtime side-effects for settings that need them."""
+    if key == "debug_logging_enabled":
+        from debug_logging import configure_debug_logging
+        from main import DATA_DIR
+        from pathlib import Path
+        configure_debug_logging(bool(value), Path(DATA_DIR))
 
 
 # ==================== Request/Response models ====================
@@ -226,6 +235,7 @@ async def update_setting(key: str, request: UpdateSettingRequest):
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
+    _apply_setting_side_effects(key, stored)
     return {"key": key, "value": stored, "is_override": True}
 
 
@@ -248,6 +258,9 @@ async def bulk_update_settings(request: BulkUpdateRequest):
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors, "stored": stored})
 
+    for key, value in stored.items():
+        _apply_setting_side_effects(key, value)
+
     return {"stored": stored}
 
 
@@ -261,6 +274,7 @@ async def reset_setting(key: str):
     mgr.delete(key)
     default = mgr.get_default(key)
 
+    _apply_setting_side_effects(key, default)
     return {"key": key, "value": default, "is_override": False}
 
 

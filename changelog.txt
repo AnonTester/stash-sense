@@ -1,0 +1,21 @@
+## 2026-06-05
+
+### 0.4.0
+- Fix: GitHub API rate limit errors on Docker crash-loops. The database update
+  check now uses a persistent 12-hour cache (data/.update_check_cache.json)
+  that survives container restarts. Previously, the 10-minute in-memory cache
+  was cleared on every restart, causing rapid crash-loops to exhaust the
+  60 req/hour unauthenticated GitHub API limit. Manual "check for updates"
+  and "start update" UI actions still bypass the cache and always hit GitHub.
+- Feature: Debug Logging setting (Settings → Diagnostics). When enabled,
+  writes verbose DEBUG-level logs to data/logs/stash_sense_debug.log.
+  The log file rotates at midnight or when it exceeds 5 MB, keeping at most
+  10 backup files. Disable when not actively diagnosing issues.
+- Fix/Feature: Fingerprint generation job now supports cursor-based resumption.
+  A checkpoint is saved after each batch of 100 scenes, so on crash recovery
+  the job resumes from roughly where it was interrupted instead of restarting
+  at scene 0. Progress counts also resume from the cursor value rather than
+  jumping from 0 again.
+- Feature: Fingerprint generation emits detailed DEBUG log entries (scene
+  skip reasons, per-batch statistics, offset tracking) to assist with
+  diagnosing the progress-reset loop reported with 3700+ scene libraries.

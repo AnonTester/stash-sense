@@ -165,10 +165,15 @@ async def database_info():
 
 @router.get("/database/check-update", response_model=CheckUpdateResponse)
 async def check_database_update():
-    """Check GitHub for a newer database release."""
+    """Check GitHub for a newer database release.
+
+    Always performs a live GitHub API call (bypasses the 12-hour persistent
+    cache) so the user always sees up-to-date information when they click
+    "check for updates" manually.
+    """
     if _db_updater is None:
         raise HTTPException(status_code=503, detail="Updater not initialized")
-    result = await _db_updater.check_update()
+    result = await _db_updater.check_update(force=True)
     return CheckUpdateResponse(**result)
 
 
@@ -179,7 +184,8 @@ async def start_database_update():
         raise HTTPException(status_code=503, detail="Updater not initialized")
     if _db_updater._update_task and not _db_updater._update_task.done():
         raise HTTPException(status_code=409, detail="Update already in progress")
-    check = await _db_updater.check_update()
+    # Force a fresh check so we always start from accurate release info.
+    check = await _db_updater.check_update(force=True)
     if not check.get("update_available"):
         raise HTTPException(status_code=400, detail="Already on latest version")
     job_id = await _db_updater.start_update(
