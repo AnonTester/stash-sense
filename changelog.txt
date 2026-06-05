@@ -1,5 +1,19 @@
 ## 2026-06-05
 
+### 0.5.2
+- Feature: "Download All Logs" button in Settings → Diagnostics log file browser.
+  Downloads all debug log files as a single zip archive (stash_sense_logs.zip).
+
+### 0.5.1
+- Feature: Debug log file browser in Settings → Diagnostics. Lists all debug
+  log files with filename, size, and date/time. Each file has a Download button
+  (streams via plugin proxy) and a Delete button. A "Delete All Logs" button
+  clears all files at once.
+- Feature: When enabling "Anonymise Debug Log" while existing log files are
+  present, a confirmation dialog warns that the existing logs will be deleted
+  (to prevent mixing anonymised and non-anonymised entries). Files are deleted
+  before the setting is saved if confirmed.
+
 ### 0.5.0
 - Fix: Dismissed and Resolved recommendation tabs now sort by date/time newest
   first instead of confidence. Date/time of dismissal or resolution is shown on

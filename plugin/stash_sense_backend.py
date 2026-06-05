@@ -74,7 +74,7 @@ def main():
         result = sidecar_get(sidecar_url, "/models/download-progress")
     elif mode == "capabilities":
         result = sidecar_get(sidecar_url, "/capabilities")
-    elif mode.startswith("settings_") or mode == "system_info":
+    elif mode.startswith("settings_") or mode == "system_info" or mode.startswith("logs_"):
         result = handle_settings(mode, args, sidecar_url)
         if result is None:
             result = {"error": f"Unknown settings mode: {mode}"}
@@ -984,6 +984,23 @@ def handle_settings(mode, args, sidecar_url):
 
     elif mode == "system_info":
         return sidecar_get(sidecar_url, "/system/info")
+
+    elif mode == "logs_list":
+        return sidecar_get(sidecar_url, "/settings/logs")
+
+    elif mode == "logs_download":
+        filename = args.get("filename", "")
+        return sidecar_get(sidecar_url, f"/settings/logs/download/{filename}")
+
+    elif mode == "logs_delete":
+        filename = args.get("filename", "")
+        return sidecar_delete(sidecar_url, f"/settings/logs/{filename}")
+
+    elif mode == "logs_delete_all":
+        return sidecar_delete(sidecar_url, "/settings/logs")
+
+    elif mode == "logs_download_all":
+        return sidecar_get(sidecar_url, "/settings/logs/download-all")
 
     return None
 

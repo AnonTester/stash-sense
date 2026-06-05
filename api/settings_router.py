@@ -4,9 +4,13 @@ Endpoints for reading, updating, and resetting sidecar settings.
 Also provides system info (hardware profile, version, uptime).
 """
 
+import base64
 import json
+import os
+import re
 import time
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -20,7 +24,7 @@ router = APIRouter(tags=["settings"])
 
 # Set at startup
 _start_time: Optional[float] = None
-_version: str = "0.5.0"
+_version: str = "0.5.2"
 
 
 def init_settings_router():
@@ -193,6 +197,104 @@ async def enable_endpoint(request: EndpointEnableRequest):
         db.set_endpoint_priorities(priorities)
 
     return {"success": True}
+
+
+# ==================== Debug log file management ====================
+# Must be registered BEFORE /settings/{key} so fixed paths win over the wildcard.
+
+_LOG_FILENAME_RE = re.compile(r'^stash_sense_debug\.log(\.\d+)?$')
+
+
+def _get_log_dir() -> Path:
+    from main import DATA_DIR
+    return Path(DATA_DIR) / "logs"
+
+
+def _safe_log_path(filename: str) -> Path:
+    """Resolve a log filename to an absolute path, raising 404 if invalid."""
+    if not _LOG_FILENAME_RE.match(filename):
+        raise HTTPException(status_code=404, detail="Log file not found")
+    path = _get_log_dir() / filename
+    if not str(path.resolve()).startswith(str(_get_log_dir().resolve())):
+        raise HTTPException(status_code=404, detail="Log file not found")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Log file not found")
+    return path
+
+
+@router.get("/settings/logs")
+async def list_log_files():
+    """List debug log files with name, size, and modification time."""
+    log_dir = _get_log_dir()
+    files = []
+    if log_dir.exists():
+        for p in sorted(log_dir.iterdir()):
+            if _LOG_FILENAME_RE.match(p.name):
+                stat = p.stat()
+                files.append({
+                    "filename": p.name,
+                    "size_bytes": stat.st_size,
+                    "modified_at": stat.st_mtime,
+                })
+    files.sort(key=lambda f: (0 if f["filename"] == "stash_sense_debug.log" else 1, f["filename"]))
+    return {"files": files}
+
+
+@router.get("/settings/logs/download-all")
+async def download_all_log_files():
+    """Return all debug log files as a base64-encoded zip archive."""
+    import io
+    import zipfile
+
+    log_dir = _get_log_dir()
+    buf = io.BytesIO()
+    added = []
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        if log_dir.exists():
+            for p in sorted(log_dir.iterdir()):
+                if _LOG_FILENAME_RE.match(p.name):
+                    zf.write(p, arcname=p.name)
+                    added.append(p.name)
+    content = buf.getvalue()
+    return {
+        "filename": "stash_sense_logs.zip",
+        "content_b64": base64.b64encode(content).decode("ascii"),
+        "size_bytes": len(content),
+        "file_count": len(added),
+    }
+
+
+@router.get("/settings/logs/download/{filename}")
+async def download_log_file(filename: str):
+    """Return log file content as base64 for browser download."""
+    path = _safe_log_path(filename)
+    content = path.read_bytes()
+    return {
+        "filename": filename,
+        "content_b64": base64.b64encode(content).decode("ascii"),
+        "size_bytes": len(content),
+    }
+
+
+@router.delete("/settings/logs/{filename}")
+async def delete_log_file(filename: str):
+    """Delete a specific debug log file."""
+    path = _safe_log_path(filename)
+    path.unlink()
+    return {"deleted": filename}
+
+
+@router.delete("/settings/logs")
+async def delete_all_log_files():
+    """Delete all debug log files."""
+    log_dir = _get_log_dir()
+    deleted = []
+    if log_dir.exists():
+        for p in log_dir.iterdir():
+            if _LOG_FILENAME_RE.match(p.name):
+                p.unlink()
+                deleted.append(p.name)
+    return {"deleted_count": len(deleted), "deleted": deleted}
 
 
 # ==================== Individual settings ====================

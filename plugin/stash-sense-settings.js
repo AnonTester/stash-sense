@@ -47,6 +47,21 @@
     async checkUpdate() {
       return apiCall('db_check_update');
     },
+    async getLogs() {
+      return apiCall('logs_list');
+    },
+    async downloadLog(filename) {
+      return apiCall('logs_download', { filename });
+    },
+    async deleteLog(filename) {
+      return apiCall('logs_delete', { filename });
+    },
+    async deleteAllLogs() {
+      return apiCall('logs_delete_all');
+    },
+    async downloadAllLogs() {
+      return apiCall('logs_download_all');
+    },
   };
 
   // ==================== State ====================
@@ -129,7 +144,12 @@
 
       for (const [catKey, cat] of cats) {
         if (catKey === 'upstream_sync') continue;
-        container.appendChild(renderCategory(catKey, cat));
+        const section = renderCategory(catKey, cat);
+        container.appendChild(section);
+        if (catKey === 'diagnostics') {
+          patchAnonymizeToggle(section);
+          container.appendChild(await renderLogFilesSection());
+        }
       }
     }
 
@@ -141,6 +161,270 @@
 
     // Job Schedules section
     await renderSchedulesCategory(container);
+  }
+
+  // ==================== Debug Log File Management ====================
+
+  function formatFileSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  function formatLogDate(unixTimestamp) {
+    const d = new Date(unixTimestamp * 1000);
+    return d.toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+  }
+
+  async function renderLogFilesSection() {
+    const section = SS.createElement('div', {
+      className: 'ss-settings-category ss-log-files-section',
+      attrs: { id: 'ss-log-files-section' },
+    });
+
+    section.innerHTML = `
+      <div class="ss-settings-cat-header">
+        <h2>Debug Log Files</h2>
+      </div>
+      <div class="ss-log-files-body">
+        <div class="ss-log-files-loading">
+          <div class="ss-spinner" style="width:16px;height:16px;"></div>
+          <span>Loading...</span>
+        </div>
+      </div>
+    `;
+
+    await refreshLogFilesList(section);
+    return section;
+  }
+
+  async function refreshLogFilesList(section) {
+    const body = section.querySelector('.ss-log-files-body');
+    if (!body) return;
+
+    let files = [];
+    try {
+      const result = await SettingsAPI.getLogs();
+      files = result.files || [];
+    } catch (e) {
+      body.innerHTML = `<p class="ss-log-files-empty">Failed to load log files: ${e.message}</p>`;
+      return;
+    }
+
+    body.innerHTML = '';
+
+    if (files.length === 0) {
+      body.innerHTML = '<p class="ss-log-files-empty">No debug log files found.</p>';
+      return;
+    }
+
+    const table = SS.createElement('div', { className: 'ss-log-files-table' });
+
+    for (const file of files) {
+      const row = SS.createElement('div', { className: 'ss-log-file-row' });
+      row.innerHTML = `
+        <span class="ss-log-file-name">${file.filename}</span>
+        <span class="ss-log-file-size">${formatFileSize(file.size_bytes)}</span>
+        <span class="ss-log-file-date">${formatLogDate(file.modified_at)}</span>
+        <span class="ss-log-file-actions"></span>
+      `;
+
+      const actions = row.querySelector('.ss-log-file-actions');
+
+      const downloadBtn = SS.createElement('button', {
+        className: 'ss-btn ss-btn-secondary ss-btn-xs',
+        textContent: 'Download',
+        events: {
+          click: async (e) => {
+            e.stopPropagation();
+            downloadBtn.disabled = true;
+            downloadBtn.textContent = '...';
+            try {
+              const result = await SettingsAPI.downloadLog(file.filename);
+              if (result.error) throw new Error(result.error);
+              const binary = atob(result.content_b64);
+              const bytes = new Uint8Array(binary.length);
+              for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+              const blob = new Blob([bytes], { type: 'text/plain' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = file.filename;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            } catch (err) {
+              console.error('[Stash Sense] Log download failed:', err);
+            } finally {
+              downloadBtn.disabled = false;
+              downloadBtn.textContent = 'Download';
+            }
+          },
+        },
+      });
+
+      const deleteBtn = SS.createElement('button', {
+        className: 'ss-btn ss-btn-danger ss-btn-xs',
+        textContent: 'Delete',
+        events: {
+          click: async (e) => {
+            e.stopPropagation();
+            deleteBtn.disabled = true;
+            deleteBtn.textContent = '...';
+            try {
+              await SettingsAPI.deleteLog(file.filename);
+              await refreshLogFilesList(section);
+            } catch (err) {
+              deleteBtn.disabled = false;
+              deleteBtn.textContent = 'Delete';
+              console.error('[Stash Sense] Log delete failed:', err);
+            }
+          },
+        },
+      });
+
+      actions.appendChild(downloadBtn);
+      actions.appendChild(deleteBtn);
+      table.appendChild(row);
+    }
+
+    body.appendChild(table);
+
+    const footer = SS.createElement('div', { className: 'ss-log-files-footer' });
+
+    const downloadAllBtn = SS.createElement('button', {
+      className: 'ss-btn ss-btn-secondary ss-btn-sm',
+      textContent: 'Download All Logs',
+      events: {
+        click: async () => {
+          downloadAllBtn.disabled = true;
+          downloadAllBtn.textContent = '...';
+          try {
+            const result = await SettingsAPI.downloadAllLogs();
+            if (result.error) throw new Error(result.error);
+            const binary = atob(result.content_b64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const blob = new Blob([bytes], { type: 'application/zip' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = result.filename || 'stash_sense_logs.zip';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          } catch (err) {
+            console.error('[Stash Sense] Download all logs failed:', err);
+          } finally {
+            downloadAllBtn.disabled = false;
+            downloadAllBtn.textContent = 'Download All Logs';
+          }
+        },
+      },
+    });
+
+    const deleteAllBtn = SS.createElement('button', {
+      className: 'ss-btn ss-btn-danger ss-btn-sm',
+      textContent: 'Delete All Logs',
+      events: {
+        click: async () => {
+          deleteAllBtn.disabled = true;
+          deleteAllBtn.textContent = '...';
+          try {
+            await SettingsAPI.deleteAllLogs();
+            await refreshLogFilesList(section);
+          } catch (err) {
+            deleteAllBtn.disabled = false;
+            deleteAllBtn.textContent = 'Delete All Logs';
+            console.error('[Stash Sense] Delete all logs failed:', err);
+          }
+        },
+      },
+    });
+
+    footer.appendChild(downloadAllBtn);
+    footer.appendChild(deleteAllBtn);
+    body.appendChild(footer);
+  }
+
+  function patchAnonymizeToggle(diagnosticsSection) {
+    // Find the toggle row for debug_logging_anonymize inside the diagnostics section.
+    // The label text uniquely identifies it; we replace the checkbox's change handler
+    // to show a warning when logs exist before saving.
+    const rows = diagnosticsSection.querySelectorAll('.ss-setting-row');
+    for (const row of rows) {
+      const label = row.querySelector('.ss-setting-label');
+      if (!label || !label.textContent.includes('Anonymise')) continue;
+
+      const checkbox = row.querySelector('input[type="checkbox"]');
+      if (!checkbox) break;
+
+      // Clone → replace to strip the existing change listener
+      const fresh = checkbox.cloneNode(true);
+      checkbox.replaceWith(fresh);
+
+      fresh.addEventListener('change', async () => {
+        if (!fresh.checked) {
+          // Turning off — no confirmation needed
+          debouncedSave('debug_logging_anonymize', false, row);
+          return;
+        }
+
+        // Turning on — check if logs exist first
+        let logs = [];
+        try {
+          const result = await SettingsAPI.getLogs();
+          logs = result.files || [];
+        } catch (_) {}
+
+        if (logs.length === 0) {
+          debouncedSave('debug_logging_anonymize', true, row);
+          return;
+        }
+
+        // Show confirmation overlay
+        const overlay = SS.createElement('div', { className: 'ss-modal-overlay' });
+        overlay.innerHTML = `
+          <div class="ss-modal-content" style="max-width:420px;">
+            <h3 style="margin:0 0 12px;">Enable Anonymisation?</h3>
+            <p style="margin:0 0 16px;color:#ccc;">
+              Enabling anonymisation will <strong>delete ${logs.length} existing debug log file${logs.length !== 1 ? 's' : ''}</strong>
+              to prevent un-anonymised data from being mixed with anonymised entries.
+            </p>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button class="ss-btn ss-btn-secondary" id="ss-anon-cancel">Cancel</button>
+              <button class="ss-btn ss-btn-danger" id="ss-anon-confirm">Delete Logs &amp; Enable</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(overlay);
+
+        overlay.querySelector('#ss-anon-cancel').addEventListener('click', () => {
+          fresh.checked = false;
+          overlay.remove();
+        });
+        overlay.addEventListener('click', (e) => {
+          if (e.target === overlay) { fresh.checked = false; overlay.remove(); }
+        });
+        overlay.querySelector('#ss-anon-confirm').addEventListener('click', async () => {
+          overlay.remove();
+          try {
+            await SettingsAPI.deleteAllLogs();
+          } catch (_) {}
+          // Refresh the log files list if visible
+          const logSection = document.getElementById('ss-log-files-section');
+          if (logSection) refreshLogFilesList(logSection);
+          debouncedSave('debug_logging_anonymize', true, row);
+        });
+      });
+
+      break;
+    }
   }
 
   async function renderIdDatabaseSection() {
