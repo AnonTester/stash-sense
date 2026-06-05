@@ -526,13 +526,16 @@
       </div>
     `;
 
+    let sidecarStatus = null;
     try {
-      const [counts, sidecarStatus] = await Promise.all([
+      const [rawCounts, _sidecarStatus] = await Promise.all([
         RecommendationsAPI.getCounts().catch(() => null),
         RecommendationsAPI.getSidecarStatus(),
       ]);
+      sidecarStatus = _sidecarStatus;
 
-      currentState.counts = counts || {};
+      const counts = rawCounts || {};
+      currentState.counts = counts;
 
       // Update the persistent status area in the app header
       updateStatusArea(sidecarStatus);
@@ -650,7 +653,7 @@
       }
 
     } catch (e) {
-      updateStatusArea({ connected: false, error: e.message });
+      updateStatusArea(sidecarStatus || { connected: false });
 
       content.innerHTML = `
         <div class="ss-error-state">
@@ -660,8 +663,7 @@
             </svg>
           </div>
           <h2>Connection Error</h2>
-          <p>${e.message}</p>
-          <p class="ss-error-hint">Make sure the Stash Sense sidecar is running and configured correctly.</p>
+          <p>Make sure the Stash Sense sidecar is running and configured correctly.</p>
           <button class="ss-btn ss-btn-primary" id="ss-retry-btn">Retry</button>
         </div>
       `;

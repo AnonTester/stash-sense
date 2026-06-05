@@ -1,5 +1,18 @@
 ## 2026-06-05
 
+### 0.5.3
+- Fix: Log file browser in Settings → Diagnostics failed with "Unknown mode:
+  logs_list" because the plugin backend dispatch condition did not include the
+  logs_* mode prefix.
+- Fix: `/health` endpoint reported sidecar version 0.5.1 while `/system/info`
+  reported 0.5.2 because `main.py` was missed in the version bump. Both
+  endpoints now return the same version.
+- Fix: TypeError "can't access property 'total_pending', counts is null" when
+  the sidecar is offline. The recommendations dashboard now treats a null counts
+  response as empty rather than crashing. The catch block no longer overwrites
+  the header with an internal JS error message; the real connection status is
+  preserved instead.
+
 ### 0.5.2
 - Feature: "Download All Logs" button in Settings → Diagnostics log file browser.
   Downloads all debug log files as a single zip archive (stash_sense_logs.zip).
