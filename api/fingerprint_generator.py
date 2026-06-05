@@ -162,6 +162,7 @@ class SceneFingerprintGenerator:
         batch_size: int = 100,
         start_offset: int = 0,
         start_processed: int = 0,
+        skip_errors: bool = False,
     ) -> AsyncIterator[GeneratorProgress]:
         """
         Generate fingerprints for all scenes that need them.
@@ -171,6 +172,8 @@ class SceneFingerprintGenerator:
             batch_size: Number of scenes to query at a time
             start_offset: Resume pagination from this offset (0 = start fresh)
             start_processed: Cumulative processed count before this run (from cursor)
+            skip_errors: When True, skip scenes whose last attempt recorded an error.
+                Use when resuming from a crash cursor to avoid infinite retry loops.
 
         Yields:
             GeneratorProgress after each scene and once more at each batch boundary
@@ -244,7 +247,8 @@ class SceneFingerprintGenerator:
                     # Check if we need to process this scene
                     existing = self.rec_db.get_scene_fingerprint(scene_id)
                     if existing:
-                        if existing.get("fingerprint_status") == "complete":
+                        status = existing.get("fingerprint_status")
+                        if status == "complete":
                             if not refresh_outdated or existing.get("db_version") == self.db_version:
                                 logger.debug(
                                     "Scene %d (%s): skipped — already fingerprinted "
@@ -257,12 +261,23 @@ class SceneFingerprintGenerator:
                                 batch_skipped += 1
                                 yield self._progress
                                 continue
+                        elif status == "error" and skip_errors:
+                            logger.debug(
+                                "Scene %d (%s): skipped — previous attempt failed "
+                                "(error record present, skip_errors=True)",
+                                scene_id, scene_title,
+                            )
+                            self._progress.skipped += 1
+                            self._progress.processed_scenes += 1
+                            batch_skipped += 1
+                            yield self._progress
+                            continue
 
                         logger.debug(
                             "Scene %d (%s): re-fingerprinting "
                             "(status=%s, db_version=%s → %s)",
                             scene_id, scene_title,
-                            existing.get("fingerprint_status"),
+                            status,
                             existing.get("db_version"), self.db_version,
                         )
                     else:
@@ -422,11 +437,19 @@ class SceneFingerprintGenerator:
 
         except httpx.TimeoutException:
             error = "Timeout - scene may be too long or system too slow"
-            logger.warning(f"Scene {scene_id} timed out")
+            logger.warning("Scene %d timed out during fingerprinting", scene_id)
+            self.rec_db.create_scene_fingerprint(
+                stash_scene_id=scene_id, total_faces=0, frames_analyzed=0,
+                fingerprint_status="error", db_version=self.db_version,
+            )
             return FingerprintResult(scene_id=scene_id, success=False, error=error)
 
         except Exception as e:
-            logger.error("Error identifying scene %s: %s", scene_id, e, exc_info=True)
+            logger.error("Error identifying scene %d: %s", scene_id, e, exc_info=True)
+            self.rec_db.create_scene_fingerprint(
+                stash_scene_id=scene_id, total_faces=0, frames_analyzed=0,
+                fingerprint_status="error", db_version=self.db_version,
+            )
             return FingerprintResult(scene_id=scene_id, success=False, error=str(e))
 
 

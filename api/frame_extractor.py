@@ -399,7 +399,15 @@ def extract_frame_sync(
         )
 
         if result.returncode != 0:
-            # ffmpeg failed - this can happen for seeks past end, etc.
+            stderr_text = (
+                result.stderr.decode("utf-8", errors="replace").strip()
+                if result.stderr else ""
+            )
+            logger.warning(
+                "ffmpeg failed (returncode=%d) for stream at %.1fs:\n%s",
+                result.returncode, timestamp_sec,
+                stderr_text or "(no stderr output)",
+            )
             return None
 
         if not result.stdout:

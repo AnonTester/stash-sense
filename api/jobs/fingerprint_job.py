@@ -6,7 +6,7 @@ import logging
 from typing import Optional
 
 from base_job import BaseJob, JobContext
-from fingerprint_generator import SceneFingerprintGenerator
+from fingerprint_generator import GeneratorStatus, SceneFingerprintGenerator
 from recommendations_router import get_db_version, get_rec_db, get_stash_client
 
 logger = logging.getLogger(__name__)
@@ -58,9 +58,12 @@ class FingerprintGenerationJob(BaseJob):
             db_version=db_version,
         )
 
+        # When resuming from a crash cursor, skip scenes that previously errored out
+        # so a permanently-broken scene cannot block the job indefinitely.
         async for progress in generator.generate_all(
             start_offset=start_offset,
             start_processed=start_processed,
+            skip_errors=bool(cursor),
         ):
             if progress.batch_completed:
                 # Persist cursor after each full batch for crash recovery
@@ -99,5 +102,20 @@ class FingerprintGenerationJob(BaseJob):
             final.failed,
         )
 
-        # Return None so the queue marks the job completed (no further cursor needed)
+        if final.status in (GeneratorStatus.PAUSED, GeneratorStatus.STOPPING):
+            # Job was stopped before finishing all scenes. Return a cursor so the
+            # queue re-queues it rather than marking it completed.
+            resume_cursor = json.dumps({
+                "offset": final.current_offset,
+                "processed": final.processed_scenes,
+            })
+            logger.warning(
+                "Fingerprint job interrupted (job_id=%d): "
+                "re-queuing from offset=%d (processed=%d/%d, failed=%d)",
+                context.job_id,
+                final.current_offset, final.processed_scenes, final.total_scenes,
+                final.failed,
+            )
+            return resume_cursor
+
         return None

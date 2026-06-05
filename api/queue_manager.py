@@ -244,6 +244,8 @@ class QueueManager:
                 self._running_contexts.pop(job_id, None)
                 try:
                     task.result()
+                except asyncio.CancelledError:
+                    pass  # Task cancelled during shutdown; job re-queued by stop()
                 except Exception:
                     logger.debug("Task %s completed with error (already handled in _run_job)", job_id)
 

@@ -1,5 +1,21 @@
 ## 2026-06-05
 
+### 0.5.4
+- Fix: Fingerprint generation no longer enters an infinite crash loop when a
+  scene repeatedly fails. Previously, connection and exception failures did not
+  write an error record to the database, so the offending scene was retried on
+  every restart. Error records are now written for ALL failure types (non-200
+  HTTP, timeout, and exceptions). When resuming from a crash cursor, scenes with
+  an existing error record are skipped so the job can advance past them.
+- Fix: When fingerprint generation is interrupted mid-run (graceful stop or
+  shutdown), the job is now re-queued for resumption rather than incorrectly
+  marked as "completed" in the job history.
+- Fix: ffmpeg frame extraction failures are now logged at WARNING level with the
+  full ffmpeg stderr output, making it possible to diagnose why specific scenes
+  fail without enabling debug logging globally.
+- Fix: `asyncio.CancelledError` raised by a finished task no longer silently
+  breaks the queue dispatch loop's completed-task check.
+
 ### 0.5.3
 - Fix: Log file browser in Settings → Diagnostics failed with "Unknown mode:
   logs_list" because the plugin backend dispatch condition did not include the
