@@ -834,6 +834,14 @@ async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_ava
     _hwaccel_env = os.environ.get("FFMPEG_HWACCEL", "none").lower().strip()
     hwaccel = None if _hwaccel_env in ("none", "", "cpu") else _hwaccel_env
 
+    # VAAPI requires a dynamically-linked ffmpeg to dlopen libva backend
+    # plugins at runtime. The mwader static build (/usr/local/bin/ffmpeg)
+    # is fully static and cannot load those plugins, so VAAPI silently fails
+    # with "Device creation failed". Use the system package (/usr/bin/ffmpeg)
+    # instead, which is dynamically linked and works correctly with libva +
+    # mesa-va-drivers. CPU and CUDA modes use the static build as normal.
+    ffmpeg_path = "/usr/bin/ffmpeg" if hwaccel == "vaapi" else "ffmpeg"
+
     config = FrameExtractionConfig(
         num_frames=num_frames,
         start_offset_pct=request.start_offset_pct,
@@ -842,6 +850,7 @@ async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_ava
         min_face_confidence=request.min_face_confidence,
         max_concurrent_extractions=max_concurrent,
         hwaccel=hwaccel,
+        ffmpeg_path=ffmpeg_path,
     )
 
     # Extract frames using ffmpeg

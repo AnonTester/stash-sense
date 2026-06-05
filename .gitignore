@@ -3,6 +3,7 @@
 *.env
 api/.env
 api/*.env
+docker-stashsense.yml
 
 # Python
 __pycache__/
@@ -67,3 +68,4 @@ Thumbs.db
 # AI instructions
 AGENTS.md
 .claude/settings.json
+

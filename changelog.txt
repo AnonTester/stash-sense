@@ -1,5 +1,28 @@
 ## 2026-06-05
 
+### 0.5.10
+- Fix: VAAPI hardware acceleration now works correctly on AMD and Intel.
+  The mwader/static-ffmpeg binary is fully static and cannot dlopen libva
+  backend plugins (the Mesa .so driver files that VAAPI requires), so VAAPI
+  always failed with "Device creation failed: -12" regardless of what runtime
+  libraries were installed. The fix uses a dual-binary approach: the static
+  build (/usr/local/bin/ffmpeg) is used for CPU and CUDA modes, while VAAPI
+  mode explicitly calls the system ffmpeg package (/usr/bin/ffmpeg), which is
+  dynamically linked and correctly loads mesa-va-drivers at runtime. Both
+  binaries are now installed in the container.
+
+### 0.5.9
+- Fix: VAAPI hardware acceleration (FFMPEG_HWACCEL=vaapi) now works correctly.
+  The previous Docker image was missing the VA-API runtime libraries that the
+  static ffmpeg binary requires at startup (libva2, libva-drm2, mesa-va-drivers).
+  Without them ffmpeg silently failed with "Device creation failed: -12" and
+  marked every scene as an error. These packages are now installed in the runtime
+  stage of the Dockerfile. AMD integrated GPU users should rebuild the image.
+- Note: scenes marked as errors due to a broken VAAPI setup can be retried by
+  starting a new fingerprint generation job from the Operations tab. New jobs
+  (started without a cursor) always retry error records while skipping scenes
+  that were already successfully fingerprinted.
+
 ### 0.5.8
 - Feature: New FFMPEG_HWACCEL environment variable controls hardware-accelerated
   frame decoding. Set to "cuda" for NVIDIA (NVDEC), "vaapi" for AMD or Intel

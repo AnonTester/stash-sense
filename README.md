@@ -129,6 +129,8 @@ devices:
 
 Check your host's render node with `ls /dev/dri/` — use `renderD129` if you have multiple GPUs and `renderD128` is your primary display adapter.
 
+> **If VAAPI fails** (ffmpeg logs "Device creation failed" or "No device available for decoder"), the affected scenes are marked as errors and skipped on crash-recovery reruns. To retry them, start a **new** fingerprint generation job from the Operations tab — new jobs always retry error scenes while skipping already-completed ones.
+
 ## Updating
 
 ### Database Updates

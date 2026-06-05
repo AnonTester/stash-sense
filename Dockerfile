@@ -49,11 +49,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libxrender-dev \
     curl \
+    # System ffmpeg (Ubuntu 22.04 package, dynamically linked).
+    # Used by FFMPEG_HWACCEL=vaapi: the static mwader build is fully static
+    # and cannot dlopen the libva backend plugins that VAAPI requires at
+    # runtime. The system package at /usr/bin/ffmpeg dynamically links
+    # libva and correctly loads the Mesa driver (mesa-va-drivers).
+    ffmpeg \
+    libva2 \
+    libva-drm2 \
+    mesa-va-drivers \
     && rm -rf /var/lib/apt/lists/*
 
-# Use static ffmpeg instead of Ubuntu's outdated 4.4 package.
-# mwader/static-ffmpeg tracks the latest ffmpeg release and includes
-# better HEVC/10-bit support and reduced memory usage vs 4.4.
+# Static ffmpeg at /usr/local/bin/ffmpeg (takes PATH precedence over system
+# ffmpeg). Used for CPU and CUDA modes — newer, better HEVC/10-bit support.
+# VAAPI mode explicitly uses /usr/bin/ffmpeg (system package) instead.
 COPY --from=ffmpeg-static /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg-static /ffprobe /usr/local/bin/ffprobe
 
