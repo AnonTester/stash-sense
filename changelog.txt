@@ -1,5 +1,13 @@
 ## 2026-06-05
 
+### 0.5.7
+- Fix: Docker image now ships with a modern static ffmpeg build (mwader/static-ffmpeg
+  latest) instead of Ubuntu 22.04's bundled ffmpeg 4.4.2 (2021). The newer build
+  includes improved HEVC/10-bit decoding, better memory efficiency for large
+  high-resolution files, and up-to-date codec support. This may reduce OOM crashes
+  on very large files (e.g. 7K HEVC 10-bit scenes) that previously caused the
+  ffmpeg subprocess to be SIGKILL'd by the kernel OOM killer.
+
 ### 0.5.6
 - Fix: Duplicate Scene File Detection (and all other analyzers) no longer crash
   with "'utf-8' codec can't decode byte" when the Stash library contains files

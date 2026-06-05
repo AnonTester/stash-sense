@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
 
+# Stage 0: Static ffmpeg (latest release, GPU-capable)
+FROM mwader/static-ffmpeg:latest AS ffmpeg-static
+
 # Stage 1: Build dependencies
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS build
 
@@ -45,9 +48,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsm6 \
     libxext6 \
     libxrender-dev \
-    ffmpeg \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Use static ffmpeg instead of Ubuntu's outdated 4.4 package.
+# mwader/static-ffmpeg tracks the latest ffmpeg release and includes
+# better HEVC/10-bit support and reduced memory usage vs 4.4.
+COPY --from=ffmpeg-static /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg-static /ffprobe /usr/local/bin/ffprobe
 
 # MediaPipe runtime dependency check (required by mp.Image)
 RUN ldconfig -p | grep -q "libGLESv2.so.2"
