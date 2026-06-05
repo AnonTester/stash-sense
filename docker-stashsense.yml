@@ -14,8 +14,25 @@ services:
       - STASH_API_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOiJ3dWZmIiwic3ViIjoiQVBJS2V5IiwiaWF0IjoxNzc0NjMzNDY4fQ._1oRn-X4DmCUecxXUZFueBAq55BNSYEM6dxuICZ-AAg
       - DATA_DIR=/data
       - PYTHONUNBUFFERED=1
+      # Hardware-accelerated ffmpeg decoding for frame extraction.
+      # Reduces memory usage on large/high-resolution files (e.g. 4K+ HEVC)
+      # by decoding on the GPU instead of allocating full-resolution frame
+      # buffers in host RAM. Comes at the cost of slightly higher per-frame
+      # seek latency due to GPU context init overhead.
+      #
+      # Options:
+      #   none  — CPU decoding (default, most compatible)
+      #   cuda  — NVIDIA GPU via NVDEC (requires deploy.resources.reservations below)
+      #   vaapi — AMD or Intel GPU via VAAPI (requires /dev/dri device, see below)
+      - FFMPEG_HWACCEL=none
+    # AMD / Intel GPU device access for VAAPI (FFMPEG_HWACCEL=vaapi).
+    # Uncomment the 'devices' block below and set FFMPEG_HWACCEL=vaapi above.
+    # The render node path is usually /dev/dri/renderD128; check with
+    # 'ls /dev/dri/' on the host if your system has multiple GPUs.
+    #devices:
+    #  - /dev/dri/renderD128:/dev/dri/renderD128
     restart: unless-stopped
-    # For nvidia GPUs
+    # For NVIDIA GPUs — uncomment and set FFMPEG_HWACCEL=cuda above
     #deploy:
     #  resources:
     #    reservations:

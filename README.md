@@ -86,8 +86,48 @@ Navigate to `/plugins/stash-sense` in Stash to open the Stash Sense dashboard. F
 |----------|----------|---------|-------------|
 | `STASH_URL` | Yes | — | URL to your Stash instance (e.g., `http://stash:9999`) |
 | `STASH_API_KEY` | Yes | — | Stash API key (Settings > Security > API Key) |
+| `FFMPEG_HWACCEL` | No | `none` | ffmpeg hardware acceleration for frame extraction. See [ffmpeg Hardware Acceleration](#ffmpeg-hardware-acceleration) below. |
 
 Additional performance and recognition settings are configurable via the **Settings** tab in the plugin UI. The sidecar auto-tunes defaults based on your hardware. Stash-box API keys are auto-discovered from your Stash instance's configured metadata providers (Settings > Metadata Providers).
+
+### ffmpeg Hardware Acceleration
+
+By default ffmpeg decodes video frames on the CPU. For very large or high-resolution files (4K+, 8K, 10-bit HEVC) this can exhaust container RAM and trigger the kernel OOM killer, crashing the container. Setting `FFMPEG_HWACCEL` offloads decoding to the GPU, keeping large frame buffers in GPU memory instead of host RAM.
+
+| Value | GPU | Notes |
+|-------|-----|-------|
+| `none` | Any / CPU | Default. Most compatible. |
+| `cuda` | NVIDIA | Uses NVDEC. Requires `--gpus all` / `deploy.resources.reservations`. |
+| `vaapi` | AMD or Intel | Uses VAAPI. Requires `/dev/dri/renderD128` mapped into the container. |
+
+**Trade-off:** hwaccel reduces memory pressure but adds a small per-frame GPU context setup cost, which slightly slows down single-frame seeks. For normal 1080p/4K libraries the default CPU mode is faster. Use hwaccel only if you are hitting OOM crashes on specific large files.
+
+**NVIDIA (CUDA):**
+
+Uncomment the `deploy` block in your compose file and set the env var:
+```yaml
+environment:
+  - FFMPEG_HWACCEL=cuda
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
+```
+
+**AMD / Intel (VAAPI):**
+
+Map the DRI render device and set the env var:
+```yaml
+environment:
+  - FFMPEG_HWACCEL=vaapi
+devices:
+  - /dev/dri/renderD128:/dev/dri/renderD128
+```
+
+Check your host's render node with `ls /dev/dri/` — use `renderD129` if you have multiple GPUs and `renderD128` is your primary display adapter.
 
 ## Updating
 

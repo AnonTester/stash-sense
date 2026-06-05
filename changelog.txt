@@ -1,5 +1,16 @@
 ## 2026-06-05
 
+### 0.5.8
+- Feature: New FFMPEG_HWACCEL environment variable controls hardware-accelerated
+  frame decoding. Set to "cuda" for NVIDIA (NVDEC), "vaapi" for AMD or Intel
+  (VAAPI via /dev/dri/renderD128), or "none" (default) for CPU decoding. When
+  enabled, large frame buffers for high-resolution files stay in GPU memory
+  rather than host RAM, reducing OOM crashes on 4K+/HEVC content. Both compose
+  files include the new variable (defaulting to "none") with commented-out AMD
+  and Intel device mappings. See README for full setup instructions.
+- Note: hwaccel reduces memory pressure but adds per-frame GPU context init
+  overhead. CPU mode remains faster for normal 1080p/4K libraries.
+
 ### 0.5.7
 - Fix: Docker image now ships with a modern static ffmpeg build (mwader/static-ffmpeg
   latest) instead of Ubuntu 22.04's bundled ffmpeg 4.4.2 (2021). The newer build

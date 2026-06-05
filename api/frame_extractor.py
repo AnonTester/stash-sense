@@ -364,9 +364,12 @@ def extract_frame_sync(
     # Key: -ss before -i enables fast seeking without decoding everything
     cmd = [config.ffmpeg_path]
 
-    # GPU-accelerated decoding (before -i)
+    # Hardware-accelerated decoding flags (must appear before -i)
     if use_hwaccel:
         cmd.extend(["-hwaccel", use_hwaccel])
+        if use_hwaccel == "vaapi":
+            # VAAPI requires a render device; /dev/dri/renderD128 is the standard path
+            cmd.extend(["-hwaccel_device", "/dev/dri/renderD128"])
 
     cmd.extend([
         "-ss", str(timestamp_sec),        # Seek to timestamp (before -i for fast seek)

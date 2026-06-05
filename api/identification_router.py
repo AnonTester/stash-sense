@@ -7,6 +7,7 @@ using face recognition with optional multi-signal matching (body, tattoo).
 import asyncio
 import base64
 import logging
+import os
 import time
 from collections import defaultdict
 from typing import Optional
@@ -830,6 +831,9 @@ async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_ava
         pass
 
     # Configure frame extraction
+    _hwaccel_env = os.environ.get("FFMPEG_HWACCEL", "none").lower().strip()
+    hwaccel = None if _hwaccel_env in ("none", "", "cpu") else _hwaccel_env
+
     config = FrameExtractionConfig(
         num_frames=num_frames,
         start_offset_pct=request.start_offset_pct,
@@ -837,6 +841,7 @@ async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_ava
         min_face_size=request.min_face_size,
         min_face_confidence=request.min_face_confidence,
         max_concurrent_extractions=max_concurrent,
+        hwaccel=hwaccel,
     )
 
     # Extract frames using ffmpeg
