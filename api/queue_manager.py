@@ -158,10 +158,10 @@ class QueueManager:
     # ========================================================================
 
     def _request_job_stop(self, job_id: int):
-        """Request a running job to stop."""
+        """Request a running job to stop (user-initiated cancel)."""
         ctx = self._running_contexts.get(job_id)
         if ctx:
-            ctx.request_stop()
+            ctx.request_user_cancel()
         self._db.set_job_status(job_id, "stopping")
 
     # ========================================================================
@@ -267,12 +267,16 @@ class QueueManager:
             cursor = job_row.get("cursor")
             final_cursor = await job_instance.run(ctx, cursor=cursor)
             if final_cursor is not None:
-                # Job interrupted mid-work, wants to resume from cursor
-                self._db.set_job_status(job_id, "queued")
-                self._db.update_job_progress(job_id, cursor=final_cursor)
-                logger.warning(f"Job {job_id} ({type_id}) yielded, re-queued at cursor={final_cursor}")
+                if ctx.is_user_cancelled():
+                    # User explicitly stopped the job — don't auto-restart
+                    self._db.complete_job(job_id)
+                    logger.warning(f"Job {job_id} ({type_id}) stopped by user (not re-queued)")
+                else:
+                    # System shutdown interrupted mid-work — re-queue for automatic resumption
+                    self._db.set_job_status(job_id, "queued")
+                    self._db.update_job_progress(job_id, cursor=final_cursor)
+                    logger.warning(f"Job {job_id} ({type_id}) yielded, re-queued at cursor={final_cursor}")
             else:
-                # Job finished all work — mark completed regardless of stopping status
                 self._db.complete_job(job_id)
                 logger.warning(f"Job {job_id} ({type_id}) completed")
         except Exception as e:

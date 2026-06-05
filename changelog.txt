@@ -1,5 +1,20 @@
 ## 2026-06-05
 
+### 0.5.5
+- Fix: Fingerprint generation crash loop now fully resolved. The previous fix
+  wrote an error record only inside Python exception handlers, which do not run
+  when the Docker container is killed by SIGKILL. Now an error record is written
+  to the database *before* each scene is processed. If the sidecar is SIGKILL'd
+  mid-run, the error record persists and skip_errors=True (active on crash
+  recovery) skips the scene rather than retrying it indefinitely.
+- Fix: Clicking Stop or Force Stop on the fingerprint generation job now
+  actually stops it. Previously the job returned a resumption cursor in all
+  cases, which caused the queue manager to re-queue it immediately. Now the
+  queue manager distinguishes user-initiated cancels (request_user_cancel) from
+  system shutdown stops (request_stop): user-cancelled jobs are marked
+  completed, not re-queued. The cursor from the last batch checkpoint is
+  preserved so a manual restart can resume where it left off.
+
 ### 0.5.4
 - Fix: Fingerprint generation no longer enters an infinite crash loop when a
   scene repeatedly fails. Previously, connection and exception failures did not

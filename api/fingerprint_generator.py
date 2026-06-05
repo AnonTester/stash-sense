@@ -283,6 +283,15 @@ class SceneFingerprintGenerator:
                     else:
                         logger.debug("Scene %d (%s): no existing fingerprint", scene_id, scene_title)
 
+                    # Pre-emptively mark as error before processing. If the sidecar is
+                    # SIGKILL'd mid-run, no Python cleanup code runs, so this record
+                    # survives. /identify/scene uses INSERT OR REPLACE, so a successful
+                    # run will overwrite it with "complete".
+                    self.rec_db.create_scene_fingerprint(
+                        stash_scene_id=scene_id, total_faces=0, frames_analyzed=0,
+                        fingerprint_status="error", db_version=self.db_version,
+                    )
+
                     # Generate fingerprint by calling /identify/scene
                     result = await self._identify_scene(scene_id)
 

@@ -17,18 +17,28 @@ class JobContext:
         self._db = db
         self._queue_manager = queue_manager
         self._stop_requested = False
+        self._user_cancelled = False
 
     @property
     def job_id(self) -> int:
         return self._job_id
 
     def request_stop(self) -> None:
-        """Signal that this job should stop at its next checkpoint."""
+        """Signal that this job should stop at its next checkpoint (system shutdown)."""
         self._stop_requested = True
+
+    def request_user_cancel(self) -> None:
+        """Signal that the user explicitly cancelled this job. Implies request_stop."""
+        self._stop_requested = True
+        self._user_cancelled = True
 
     def is_stop_requested(self) -> bool:
         """Check whether a stop has been requested."""
         return self._stop_requested
+
+    def is_user_cancelled(self) -> bool:
+        """True if the user explicitly cancelled this job (vs. system shutdown)."""
+        return self._user_cancelled
 
     async def should_yield(self) -> bool:
         """Check whether this job should yield to a higher-priority job.
