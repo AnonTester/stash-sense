@@ -2860,8 +2860,8 @@
     } catch (_) {}
 
     // Display value helper - applies enum normalization if enabled
-    // cup_size (e.g. "DD") and country_code (e.g. "US") must stay ALL_CAPS
-    const _noNormalizeFields = new Set(['cup_size', 'country_code']);
+    // cup_size (e.g. "DD") and country (ISO code e.g. "US") must stay ALL_CAPS
+    const _noNormalizeFields = new Set(['cup_size', 'country']);
     function displayValue(val, fieldName) {
       const formatted = formatFieldValue(val);
       if (!normalizeEnum || (fieldName && _noNormalizeFields.has(fieldName))) return formatted;
@@ -4769,7 +4769,12 @@
     const defaultDisplay = defaultChoice === 'upstream'
       ? (change.upstream_display || change.upstream_value)
       : (change.local_display || change.local_value);
-    resultInput.value = formatFieldValue(defaultDisplay) === '(empty)' ? '' : String(defaultDisplay || '');
+    const rawDefaultStr = formatFieldValue(defaultDisplay) === '(empty)' ? '' : String(defaultDisplay || '');
+    // Apply the same normalization as the local/upstream labels so the result preview matches
+    const normalizedDefault = rawDefaultStr && typeof displayValue === 'function'
+      ? displayValue(defaultDisplay, change.field)
+      : rawDefaultStr;
+    resultInput.value = normalizedDefault;
     if (hasDisplay) {
       resultInput.dataset.rawValue = defaultVal != null ? String(defaultVal) : '';
       resultInput.readOnly = true;
@@ -4788,8 +4793,9 @@
     localCb.addEventListener('change', () => {
       if (localCb.checked) {
         upstreamCb.checked = false;
-        const displayVal = hasDisplay ? (change.local_display || change.local_value) : change.local_value;
-        resultInput.value = formatFieldValue(displayVal) === '(empty)' ? '' : String(displayVal || '');
+        const srcDisplay = hasDisplay ? (change.local_display || change.local_value) : change.local_value;
+        const rawStr = formatFieldValue(srcDisplay) === '(empty)' ? '' : String(srcDisplay || '');
+        resultInput.value = rawStr && typeof displayValue === 'function' ? displayValue(srcDisplay, change.field) : rawStr;
         if (hasDisplay) resultInput.dataset.rawValue = change.local_value != null ? String(change.local_value) : '';
       }
     });
@@ -4797,8 +4803,9 @@
     upstreamCb.addEventListener('change', () => {
       if (upstreamCb.checked) {
         localCb.checked = false;
-        const displayVal = hasDisplay ? (change.upstream_display || change.upstream_value) : change.upstream_value;
-        resultInput.value = formatFieldValue(displayVal) === '(empty)' ? '' : String(displayVal || '');
+        const srcDisplay = hasDisplay ? (change.upstream_display || change.upstream_value) : change.upstream_value;
+        const rawStr = formatFieldValue(srcDisplay) === '(empty)' ? '' : String(srcDisplay || '');
+        resultInput.value = rawStr && typeof displayValue === 'function' ? displayValue(srcDisplay, change.field) : rawStr;
         if (hasDisplay) resultInput.dataset.rawValue = change.upstream_value != null ? String(change.upstream_value) : '';
       }
     });
