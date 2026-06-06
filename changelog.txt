@@ -1,3 +1,21 @@
+## 2026-06-06
+
+### 0.5.11
+- Fix: 404 error when saving the "Normalize Enum Display" setting and other
+  user preferences. The sidecar was missing GET/POST endpoints for
+  /recommendations/settings/{key} that the plugin backend calls to persist
+  per-user UI settings. These endpoints now read and write the user_settings
+  table in stash_sense.db.
+- Fix: Breast type, ethnicity, eye color, and hair color values no longer
+  display in ALL_CAPS on the upstream performer changes detail page when
+  "Normalize Enum Display" is enabled. Only values that should remain
+  ALL_CAPS (cup_size, e.g. "DD", and country_code, e.g. "US") are exempted
+  from Title Case conversion.
+- Feature: "Accept All URL Only Changes" button on the Upstream Performer
+  Changes list. Accepts all pending recommendations where the only change is
+  to the performer's URL list, without requiring individual review. Modelled
+  on the existing "Accept All Tag/URL/Code Only Changes" for scenes.
+
 ## 2026-06-05
 
 ### 0.5.10

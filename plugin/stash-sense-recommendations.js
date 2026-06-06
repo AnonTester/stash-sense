@@ -319,6 +319,10 @@
       return apiCall('rec_accept_all_scene_tag_only_changes', {});
     },
 
+    async acceptAllPerformerUrlOnlyChanges() {
+      return apiCall('rec_accept_all_performer_url_only_changes', {});
+    },
+
     async acceptSceneTagOnlyChange(recId) {
       return apiCall('rec_accept_scene_tag_only_change', { rec_id: recId });
     },
@@ -408,6 +412,13 @@
     const hasTagChanges = (tagChanges.added || []).length > 0 || (tagChanges.removed || []).length > 0;
     const hasSimpleChanges = simpleChanges.length > 0;
     return hasTagChanges || hasSimpleChanges;
+  }
+
+  function isUrlOnlyPerformerChangeDetails(details) {
+    if (!details || typeof details !== 'object') return false;
+    const changes = filterRealChanges(details.changes || []);
+    if (changes.length === 0) return false;
+    return changes.every(change => change.field === 'urls');
   }
 
   function parseConfidencePercent(value) {
@@ -911,6 +922,10 @@
             ? '<button class="ss-accept-all-btn" id="ss-accept-all-tag-url-code-btn">Accept All Tag/URL/Code Only Changes</button>'
             : ''
           }
+          ${currentState.type === 'upstream_performer_changes'
+            ? '<button class="ss-accept-all-btn" id="ss-accept-all-performer-url-btn">Accept All URL Only Changes</button>'
+            : ''
+          }
           <button class="ss-dismiss-all-btn" id="ss-dismiss-all-btn">Dismiss All</button>
         </div>
         ` : ''}
@@ -1102,6 +1117,52 @@
           acceptAllTagOnlyBtn.textContent = `Failed: ${e.message}`;
           acceptAllTagOnlyBtn.classList.add('ss-btn-error');
           acceptAllTagOnlyBtn.disabled = false;
+        }
+      });
+    }
+
+    // Accept All URL Only Performer Changes button
+    const acceptAllPerformerUrlBtn = container.querySelector('#ss-accept-all-performer-url-btn');
+    if (acceptAllPerformerUrlBtn) {
+      acceptAllPerformerUrlBtn.addEventListener('click', async () => {
+        acceptAllPerformerUrlBtn.disabled = true;
+        acceptAllPerformerUrlBtn.textContent = 'Loading...';
+        try {
+          const allPending = await RecommendationsAPI.getList({
+            type: 'upstream_performer_changes',
+            status: 'pending',
+            limit: 10000,
+            offset: 0,
+          });
+
+          const urlOnlyRecs = (allPending.recommendations || []).filter(rec => isUrlOnlyPerformerChangeDetails(rec.details));
+          const total = urlOnlyRecs.length;
+          if (total === 0) {
+            acceptAllPerformerUrlBtn.textContent = 'No URL-only changes';
+            setTimeout(() => {
+              acceptAllPerformerUrlBtn.textContent = 'Accept All URL Only Changes';
+              acceptAllPerformerUrlBtn.disabled = false;
+            }, 1600);
+            return;
+          }
+
+          const result = await RecommendationsAPI.acceptAllPerformerUrlOnlyChanges();
+          const accepted = result.accepted_count || 0;
+          const failed = result.failed_count || 0;
+          if (failed > 0) {
+            acceptAllPerformerUrlBtn.textContent = `${accepted} accepted, ${failed} failed`;
+            acceptAllPerformerUrlBtn.classList.add('ss-btn-error');
+          } else {
+            acceptAllPerformerUrlBtn.textContent = `Accepted ${accepted}`;
+            acceptAllPerformerUrlBtn.classList.add('ss-btn-success');
+          }
+          setTimeout(() => {
+            renderCurrentView(document.getElementById('ss-recommendations'));
+          }, 1500);
+        } catch (e) {
+          acceptAllPerformerUrlBtn.textContent = `Failed: ${e.message}`;
+          acceptAllPerformerUrlBtn.classList.add('ss-btn-error');
+          acceptAllPerformerUrlBtn.disabled = false;
         }
       });
     }
@@ -2799,9 +2860,12 @@
     } catch (_) {}
 
     // Display value helper - applies enum normalization if enabled
-    function displayValue(val) {
+    // cup_size (e.g. "DD") and country_code (e.g. "US") must stay ALL_CAPS
+    const _noNormalizeFields = new Set(['cup_size', 'country_code']);
+    function displayValue(val, fieldName) {
       const formatted = formatFieldValue(val);
-      return normalizeEnum ? normalizeEnumValue(formatted) : formatted;
+      if (!normalizeEnum || (fieldName && _noNormalizeFields.has(fieldName))) return formatted;
+      return normalizeEnumValue(formatted);
     }
 
     // Smart default: prefer upstream (stash-box is source of truth)
@@ -4661,7 +4725,7 @@
     localCb.className = 'ss-upstream-cb-local';
     localCb.checked = defaultChoice === 'local';
     localCheckLabel.appendChild(localCb);
-    localCheckLabel.appendChild(document.createTextNode(' ' + displayValue(change.local_display || change.local_value)));
+    localCheckLabel.appendChild(document.createTextNode(' ' + displayValue(change.local_display || change.local_value, change.field)));
     localCell.appendChild(localLabel);
     localCell.appendChild(localCheckLabel);
 
@@ -4677,7 +4741,7 @@
     upstreamCb.className = 'ss-upstream-cb-upstream';
     upstreamCb.checked = defaultChoice === 'upstream';
     upstreamCheckLabel.appendChild(upstreamCb);
-    upstreamCheckLabel.appendChild(document.createTextNode(' ' + displayValue(change.upstream_display || change.upstream_value)));
+    upstreamCheckLabel.appendChild(document.createTextNode(' ' + displayValue(change.upstream_display || change.upstream_value, change.field)));
     upstreamCell.appendChild(upstreamLabel);
     upstreamCell.appendChild(upstreamCheckLabel);
 

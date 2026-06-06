@@ -214,6 +214,11 @@ class RecommendationCountsResponse(BaseModel):
     total_pending: int
 
 
+class UserSettingRequest(BaseModel):
+    """Request to set a user setting value."""
+    value: Any
+
+
 class ResolveRequest(BaseModel):
     """Request to resolve a recommendation."""
     action: str = Field(description="Action taken: 'merged', 'deleted', 'linked', etc.")
@@ -728,6 +733,29 @@ async def _validate_and_prune_duplicate_scene_group_recommendations(
             )
 
     return deleted_rec_ids, missing_scene_ids
+
+
+@router.get("/settings")
+async def get_all_user_settings():
+    """Get all user settings stored in the recommendations DB."""
+    db = get_rec_db()
+    return {"settings": db.get_all_user_settings()}
+
+
+@router.get("/settings/{key}")
+async def get_user_setting(key: str):
+    """Get a single user setting by key."""
+    db = get_rec_db()
+    value = db.get_user_setting(key)
+    return {"key": key, "value": value}
+
+
+@router.post("/settings/{key}")
+async def set_user_setting(key: str, request: UserSettingRequest):
+    """Set a user setting value."""
+    db = get_rec_db()
+    db.set_user_setting(key, request.value)
+    return {"key": key, "value": request.value}
 
 
 @router.get("", response_model=RecommendationListResponse)
@@ -2974,6 +3002,89 @@ async def _accept_all_scene_tag_only_changes(stash, db) -> dict:
         "skipped_count": skipped,
         "ensured_tags_count": ensured_tags,
     }
+
+
+def _is_url_only_performer_change(details: dict) -> bool:
+    """Return True when the only change is to the urls field."""
+    if not isinstance(details, dict):
+        return False
+    changes = details.get("changes") or []
+    if not changes:
+        return False
+    for change in changes:
+        if str(change.get("field") or "") != "urls":
+            return False
+    return True
+
+
+async def _accept_all_performer_url_only_changes(stash, db) -> dict:
+    """Accept pending performer recommendations with only URL changes."""
+    recs = db.get_recommendations(
+        status="pending", type="upstream_performer_changes", limit=10000,
+    )
+
+    accepted = 0
+    failed = 0
+    skipped = 0
+
+    for rec in recs:
+        current = db.get_recommendation(rec.id)
+        if not current or current.status != "pending":
+            continue
+
+        details = current.details or {}
+        if not _is_url_only_performer_change(details):
+            skipped += 1
+            continue
+
+        performer_id = str(details.get("performer_id") or "").strip()
+        if not performer_id:
+            skipped += 1
+            continue
+
+        changes = details.get("changes") or []
+        upstream_urls = None
+        for change in changes:
+            if change.get("field") == "urls":
+                upstream_urls = change.get("upstream_value")
+                break
+
+        if upstream_urls is None:
+            skipped += 1
+            continue
+
+        if isinstance(upstream_urls, list):
+            url_list = [str(u) for u in upstream_urls if u]
+        else:
+            url_list = [str(upstream_urls)] if upstream_urls else []
+
+        try:
+            await stash.update_performer(performer_id, urls=url_list)
+            db.resolve_recommendation(
+                current.id,
+                action="applied",
+                details={"bulk": "url_only_performer_changes"},
+            )
+            accepted += 1
+        except Exception as e:
+            failed += 1
+            logger.warning(
+                "Failed bulk URL-only apply for rec %s (performer %s): %s",
+                current.id,
+                performer_id,
+                e,
+            )
+
+    return {"accepted_count": accepted, "failed_count": failed, "skipped_count": skipped}
+
+
+@router.post("/actions/accept-all-performer-url-only-changes")
+async def accept_all_performer_url_only_changes():
+    """Accept pending performer recommendations with only URL changes."""
+    stash = get_stash_client()
+    db = get_rec_db()
+    result = await _accept_all_performer_url_only_changes(stash, db)
+    return {"success": True, **result}
 
 
 @router.post("/actions/accept-all-fingerprint-matches")

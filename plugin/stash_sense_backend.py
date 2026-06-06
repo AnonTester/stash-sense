@@ -898,6 +898,14 @@ def handle_recommendations(mode, args, sidecar_url):
             timeout=300,
         )
 
+    elif mode == "rec_accept_all_performer_url_only_changes":
+        return sidecar_post(
+            sidecar_url,
+            "/recommendations/actions/accept-all-performer-url-only-changes",
+            {},
+            timeout=300,
+        )
+
     elif mode == "user_get_all_settings":
         return sidecar_get(sidecar_url, "/recommendations/settings")
 
