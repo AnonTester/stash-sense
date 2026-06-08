@@ -30,7 +30,8 @@
       return apiCall('settings_get_all');
     },
     async update(key, value) {
-      return apiCall('settings_update', { key, value });
+      const args = { key, value, plugin_version: SS.PLUGIN_VERSION };
+      return apiCall('settings_update', args);
     },
     async reset(key) {
       return apiCall('settings_reset', { key });

@@ -1,5 +1,20 @@
 ## 2026-06-08
 
+### 0.5.15
+- Fix: "Accept All Tag/URL/Code Only Changes" no longer counts stale-scene
+  recommendations as failures. When the sidecar detects that a scene no
+  longer exists in Stash (RuntimeError "Scene not found"), the recommendation
+  is now permanently deleted from the database (not dismissed) and the JS
+  loop counts it separately as "stale removed". Previously these appeared as
+  failures in the summary and the button showed an error state. The button
+  text now distinguishes: "Accepted X/Y, Z stale removed" or "Accepted X/Y"
+  when there are no failures.
+- Enhancement: Debug logging startup message now includes both sidecar and
+  plugin versions when available: "Debug logging enabled (sidecar v0.5.15,
+  plugin v0.5.15) → ...". The plugin version is passed through the settings
+  update request whenever the debug logging toggle or anonymise setting is
+  changed from the Settings UI.
+
 ### 0.5.14
 - Enhancement: Debug log now includes the sidecar version number in the
   activation message (e.g. "Debug logging enabled v0.5.14 → ...").

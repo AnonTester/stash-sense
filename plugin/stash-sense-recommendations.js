@@ -1056,6 +1056,7 @@
 
           const STALL_TIMEOUT_MIN_MS = 120000;
           let accepted = 0;
+          let cleaned = 0;
           let failed = 0;
           let ensuredTags = 0;
           let processed = 0;
@@ -1080,8 +1081,12 @@
                 RecommendationsAPI.acceptSceneTagOnlyChange(rec.id),
                 new Promise((_, reject) => setTimeout(() => reject(new Error(`Timed out after ${Math.ceil(stallTimeoutMs / 1000)}s`)), stallTimeoutMs)),
               ]);
-              accepted += 1;
-              ensuredTags += (response?.ensured_tags_count || 0);
+              if (response?.action === 'deleted_stale_scene') {
+                cleaned += 1;
+              } else {
+                accepted += 1;
+                ensuredTags += (response?.ensured_tags_count || 0);
+              }
             } catch (e) {
               failed += 1;
               const msg = String(e.message || e || 'unknown error');
@@ -1102,12 +1107,15 @@
           }
 
           if (failed > 0) {
-            acceptAllTagOnlyBtn.textContent = `${accepted}/${total} accepted, ${failed} failed — see browser console for details`;
+            const cleanedSuffix = cleaned > 0 ? `, ${cleaned} stale removed` : '';
+            acceptAllTagOnlyBtn.textContent = `${accepted}/${total} accepted${cleanedSuffix}, ${failed} failed — see browser console for details`;
             acceptAllTagOnlyBtn.classList.add('ss-btn-error');
             console.warn('[Stash Sense] Tag/URL/code-only accept failures:', failureDetails);
           } else {
-            const ensuredSuffix = ensuredTags > 0 ? `, ${ensuredTags} tags created/linked` : '';
-            acceptAllTagOnlyBtn.textContent = `Accepted ${accepted}/${total}${ensuredSuffix}`;
+            const parts = [`Accepted ${accepted}/${total}`];
+            if (ensuredTags > 0) parts.push(`${ensuredTags} tags created/linked`);
+            if (cleaned > 0) parts.push(`${cleaned} stale removed`);
+            acceptAllTagOnlyBtn.textContent = parts.join(', ');
             acceptAllTagOnlyBtn.classList.add('ss-btn-success');
           }
 

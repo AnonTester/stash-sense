@@ -24,7 +24,7 @@ router = APIRouter(tags=["settings"])
 
 # Set at startup
 _start_time: Optional[float] = None
-_version: str = "0.5.14"
+_version: str = "0.5.15"
 
 
 def init_settings_router():
@@ -33,7 +33,7 @@ def init_settings_router():
     _start_time = time.monotonic()
 
 
-def _apply_setting_side_effects(key: str, value: Any) -> None:
+def _apply_setting_side_effects(key: str, value: Any, plugin_version: Optional[str] = None) -> None:
     """Apply runtime side-effects for settings that need them."""
     if key in ("debug_logging_enabled", "debug_logging_anonymize"):
         from debug_logging import configure_debug_logging
@@ -43,13 +43,14 @@ def _apply_setting_side_effects(key: str, value: Any) -> None:
         enabled = bool(value) if key == "debug_logging_enabled" else bool(mgr.get("debug_logging_enabled"))
         anonymize = bool(value) if key == "debug_logging_anonymize" else bool(mgr.get("debug_logging_anonymize"))
         from main import app
-        configure_debug_logging(enabled, Path(DATA_DIR), anonymize=anonymize, version=app.version)
+        configure_debug_logging(enabled, Path(DATA_DIR), anonymize=anonymize, version=app.version, plugin_version=plugin_version)
 
 
 # ==================== Request/Response models ====================
 
 class UpdateSettingRequest(BaseModel):
     value: Any
+    plugin_version: Optional[str] = None
 
 
 class BulkUpdateRequest(BaseModel):
@@ -341,7 +342,7 @@ async def update_setting(key: str, request: UpdateSettingRequest):
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    _apply_setting_side_effects(key, stored)
+    _apply_setting_side_effects(key, stored, plugin_version=request.plugin_version)
     return {"key": key, "value": stored, "is_override": True}
 
 

@@ -982,7 +982,11 @@ def handle_settings(mode, args, sidecar_url):
     elif mode == "settings_update":
         key = args.get("key", "")
         value = args.get("value")
-        return sidecar_put(sidecar_url, f"/settings/{key}", {"value": value})
+        body = {"value": value}
+        plugin_version = args.get("plugin_version")
+        if plugin_version:
+            body["plugin_version"] = plugin_version
+        return sidecar_put(sidecar_url, f"/settings/{key}", body)
 
     elif mode == "settings_update_bulk":
         settings = args.get("settings", {})

@@ -3145,7 +3145,12 @@ async def accept_scene_tag_only_change(request: AcceptSceneTagOnlyChangeRequest)
         result = await _apply_scene_tag_only_recommendation(stash, db, rec)
         return {"success": True, **result}
     except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        msg = str(e)
+        if "scene not found" in msg.lower():
+            db.delete_recommendation(rec.id)
+            logger.debug("Deleted stale scene rec rec_id=%s scene_id=%s", rec.id, scene_id)
+            return {"success": True, "action": "deleted_stale_scene", "rec_id": rec.id, "scene_id": scene_id}
+        raise HTTPException(status_code=400, detail=msg)
     except Exception as e:
         logger.warning(
             "Unexpected error accepting scene tag/url/code change for rec %s (scene %s): %s",

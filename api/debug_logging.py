@@ -81,6 +81,7 @@ def configure_debug_logging(
     data_dir: Path,
     anonymize: bool = False,
     version: Optional[str] = None,
+    plugin_version: Optional[str] = None,
 ) -> None:
     """Add or remove the debug file handler on the root logger.
 
@@ -93,6 +94,7 @@ def configure_debug_logging(
                   Logs are written to ``data_dir/logs/``.
         anonymize: If True, apply PII redaction (names, paths → IDs only).
         version: Optional sidecar version string for the startup log entry.
+        plugin_version: Optional plugin version string for the startup log entry.
     """
     global _debug_handler
 
@@ -141,7 +143,12 @@ def configure_debug_logging(
     root.setLevel(logging.DEBUG)
 
     _debug_handler = handler
-    version_str = f" v{version}" if version else ""
+    version_parts = []
+    if version:
+        version_parts.append(f"sidecar v{version}")
+    if plugin_version:
+        version_parts.append(f"plugin v{plugin_version}")
+    version_str = f" ({', '.join(version_parts)})" if version_parts else ""
     logger.warning(
         "Debug logging enabled%s → %s (max %d MB, %d backups, anonymize=%s)",
         version_str, log_path, _MAX_BYTES // (1024 * 1024), _BACKUP_COUNT, anonymize,
