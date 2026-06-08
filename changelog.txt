@@ -1,3 +1,20 @@
+## 2026-06-08
+
+### 0.5.13
+- Fix: "Accept All Tag/URL/Code Only Changes" for upstream scene changes no
+  longer shows a generic "accepting failed" error with no detail when one or
+  more items fail. Failures are now counted individually, logged to the browser
+  console with the rec ID and error message, and the button reports
+  "X/Y accepted, Z failed — see browser console for details". Previously, a
+  stall timeout on the last item would re-throw to the outer catch and show a
+  single unhelpful error after all items were processed. The sidecar endpoint
+  now also logs unexpected exceptions (with stack trace) at WARNING level and
+  returns a 500 response with the rec ID, scene ID, and exception type instead
+  of a bare HTTP 500. Additionally, fetching the recommendation list no longer
+  risks a 30-second timeout on libraries with 4000+ pending recommendations —
+  the sidecar request timeout is now 120 seconds when more than 500 items are
+  requested.
+
 ## 2026-06-06
 
 ### 0.5.12

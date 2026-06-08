@@ -3115,11 +3115,21 @@ async def accept_scene_tag_only_change(request: AcceptSceneTagOnlyChangeRequest)
     rec = db.get_recommendation(request.rec_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Recommendation not found")
+    scene_id = str((rec.details or {}).get("scene_id") or "?")
     try:
         result = await _apply_scene_tag_only_recommendation(stash, db, rec)
         return {"success": True, **result}
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.warning(
+            "Unexpected error accepting scene tag/url/code change for rec %s (scene %s): %s",
+            rec.id, scene_id, e, exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Accept failed for rec {rec.id} (scene {scene_id}): {type(e).__name__}: {e}",
+        )
 
 
 class BatchDismissRequest(BaseModel):

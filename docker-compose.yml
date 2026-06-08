@@ -1,7 +1,10 @@
 services:
   stash-sense:
+    # to build locally:
     build: .
-    image: carrotwaxr/stash-sense:latest
+    image: stash-sense:local
+    # to use docker hub:
+    # image: carrotwaxr/stash-sense:latest
     container_name: stash-sense
     restart: unless-stopped
     ports:

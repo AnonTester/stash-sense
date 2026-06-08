@@ -1063,6 +1063,7 @@
           let stallTimeoutMs = STALL_TIMEOUT_MIN_MS;
           let currentItemStart = 0;
           let progressTicker = null;
+          const failureDetails = [];
 
           const setProgressText = () => {
             const elapsedSec = Math.max(0, Math.floor((Date.now() - currentItemStart) / 1000));
@@ -1077,16 +1078,15 @@
             try {
               const response = await Promise.race([
                 RecommendationsAPI.acceptSceneTagOnlyChange(rec.id),
-                new Promise((_, reject) => setTimeout(() => reject(new Error(`Stalled for ${Math.ceil(stallTimeoutMs / 1000)}s`)), stallTimeoutMs)),
+                new Promise((_, reject) => setTimeout(() => reject(new Error(`Timed out after ${Math.ceil(stallTimeoutMs / 1000)}s`)), stallTimeoutMs)),
               ]);
               accepted += 1;
               ensuredTags += (response?.ensured_tags_count || 0);
             } catch (e) {
               failed += 1;
-              // Stop on a stall timeout; the action likely got stuck.
-              if (String(e.message || '').toLowerCase().includes('stalled for')) {
-                throw e;
-              }
+              const msg = String(e.message || e || 'unknown error');
+              failureDetails.push(`rec ${rec.id}: ${msg}`);
+              console.warn('[Stash Sense] Accept tag/url/code-only scene change failed:', { rec_id: rec.id, error: msg });
             } finally {
               if (progressTicker) {
                 clearInterval(progressTicker);
@@ -1102,8 +1102,9 @@
           }
 
           if (failed > 0) {
-            acceptAllTagOnlyBtn.textContent = `${accepted}/${total} accepted, ${failed} failed`;
+            acceptAllTagOnlyBtn.textContent = `${accepted}/${total} accepted, ${failed} failed — see browser console for details`;
             acceptAllTagOnlyBtn.classList.add('ss-btn-error');
+            console.warn('[Stash Sense] Tag/URL/code-only accept failures:', failureDetails);
           } else {
             const ensuredSuffix = ensuredTags > 0 ? `, ${ensuredTags} tags created/linked` : '';
             acceptAllTagOnlyBtn.textContent = `Accepted ${accepted}/${total}${ensuredSuffix}`;

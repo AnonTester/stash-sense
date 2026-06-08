@@ -396,7 +396,9 @@ def rec_list(sidecar_url, status=None, rec_type=None, limit=100, offset=0):
     params.append(f"limit={limit}")
     params.append(f"offset={offset}")
     query = "?" + "&".join(params) if params else ""
-    return sidecar_get(sidecar_url, f"/recommendations{query}")
+    # Use a longer timeout for large fetches (4000+ recs with full details)
+    timeout = 120 if limit > 500 else 30
+    return sidecar_get(sidecar_url, f"/recommendations{query}", timeout=timeout)
 
 
 def rec_get(sidecar_url, rec_id):
