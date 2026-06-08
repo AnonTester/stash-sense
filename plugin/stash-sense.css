@@ -3719,7 +3719,7 @@ a.ss-detail-entity-link:hover {
 /* Duplicate Scenes */
 .ss-dup-scenes-grid {
   display: grid;
-  grid-template-columns: minmax(320px, 1fr) minmax(320px, 1.35fr);
+  grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
   gap: 16px;
   align-items: start;
   margin: 20px 0;
@@ -3731,6 +3731,7 @@ a.ss-detail-entity-link:hover {
 }
 
 .ss-dup-matches-title,
+.ss-dup-source-title,
 .ss-dup-group-note,
 .ss-dup-source-note {
   color: var(--bs-secondary-color);
@@ -3741,7 +3742,8 @@ a.ss-detail-entity-link:hover {
   margin-bottom: 12px;
 }
 
-.ss-dup-matches-title {
+.ss-dup-matches-title,
+.ss-dup-source-title {
   margin-bottom: 10px;
   font-weight: 600;
 }
@@ -3793,6 +3795,8 @@ a.ss-detail-entity-link:hover {
 .ss-dup-scene-card h4 {
   margin: 0 0 8px 0;
   font-size: 14px;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .ss-dup-scene-header-row {

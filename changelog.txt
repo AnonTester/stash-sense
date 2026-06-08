@@ -1,5 +1,22 @@
 ## 2026-06-08
 
+### 0.6.0
+- Fix: "Delete Match" and "Delete Source" buttons in the duplicate scenes 
+  detail view now actually delete the scene file (delete_file=true), 
+  respecting the Stash trash path setting if configured.
+- UI: "Delete Match" confirm modal reworded to make clear the scene file will
+  be permanently deleted ("Permanently delete matched scene ... and its file?
+  This cannot be undone."). Previously the wording implied only the
+  recommendation entry would be removed.
+- UI: Long scene names in the "Delete Match" confirm modal are now truncated
+  with overflow ellipsis so they cannot break out of the modal bounds.
+- UI: Duplicate scenes detail layout — "Source scene" label is now displayed
+  in bold above the source preview card, mirroring the "Possible Matches"
+  label position above the matches column. The label has been removed from
+  inside the card header where it previously appeared as plain small text.
+- UI: Possible match preview cards are now the same width as the source
+  preview card (grid columns changed from 1fr / 1.35fr to equal 1fr / 1fr).
+
 ### 0.5.17
 - Enhancement: When a tag/URL/code-only scene change recommendation is
   rejected (returns HTTP 400), the sidecar now logs the reason at DEBUG level.

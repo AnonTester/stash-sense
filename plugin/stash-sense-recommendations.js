@@ -2057,7 +2057,7 @@
             '<span>Select for merge</span>' +
           '</label>'
         : '';
-      const sourceNote = isSource ? '<div class="ss-dup-source-note">Source scene</div>' : '';
+      const sourceNote = '';
 
       return '<div class="ss-dup-scene-card' + (isSource ? ' ss-dup-source-card' : '') + '" data-id="' + id + '">' +
         '<div class="ss-dup-scene-thumb">' +
@@ -2179,8 +2179,10 @@
 
     async function handleDeleteMatch(entry, buttonEl) {
       const sceneTitles = getSceneTitles();
+      const sceneTitle = sceneTitles[entry.match.match_scene_id] || ('Scene ' + entry.match.match_scene_id);
+      const titleBlock = '<div style="margin:8px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600">"' + escapeHtml(sceneTitle) + '"</div>';
       showConfirmModal(
-        'Delete matched scene "' + sceneTitles[entry.match.match_scene_id] + '"? It will be removed from this review and cannot be undone.',
+        '',
         async function() {
           try {
             disableAllDupActions();
@@ -2190,7 +2192,7 @@
               sourceSceneId,
               entry.match.match_scene_id,
               entry.match.recommendation_id,
-              false,
+              true,
             );
             ensureSuccessful(deleteResult, 'Delete failed');
 
@@ -2200,20 +2202,24 @@
             updateCurrentRecommendationState();
 
             if (!activeMatchEntries.length) {
-              showToast('Matched scene removed. No duplicate matches remain for this source.', 'info');
+              showToast('Matched scene and its file permanently deleted. No duplicate matches remain for this source.', 'info');
               returnToRecommendationList();
               return;
             }
 
             renderDetail();
-            showToast('Matched scene removed from this review.', 'info');
+            showToast('Matched scene and its file permanently deleted.', 'info');
           } catch (e) {
             buttonEl.textContent = 'Failed: ' + e.message;
             buttonEl.classList.add('ss-btn-error');
             enableAllDupActions();
           }
         },
-        { showDontAsk: true, storageKey: 'delete-dup-scene-match' }
+        {
+          showDontAsk: true,
+          storageKey: 'delete-dup-scene-match',
+          htmlBody: 'Permanently delete matched scene and its file?' + titleBlock + 'This cannot be undone.',
+        }
       );
     }
 
@@ -2307,6 +2313,7 @@
           '</div>' +
           '<div class="ss-dup-scenes-grid">' +
             '<div class="ss-dup-source-column">' +
+              '<div class="ss-dup-source-title">Source scene</div>' +
               renderSceneCard(sourceScene, sourceSceneId, {
                 summaryFallback: sourceSummary,
                 isSource: true,
@@ -2379,8 +2386,10 @@
 
       if (deleteBtn) {
         deleteBtn.addEventListener('click', function() {
+          const sourceTitle = sceneTitles[sourceSceneId] || ('Scene ' + sourceSceneId);
+          const sourceTitleBlock = '<div style="margin:8px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600">"' + escapeHtml(sourceTitle) + '"</div>';
           showConfirmModal(
-            'Delete source scene "' + sceneTitles[sourceSceneId] + '"? All current matches in this review will be closed. This cannot be undone.',
+            '',
             async function() {
               try {
                 disableAllDupActions();
@@ -2388,7 +2397,7 @@
                 await RecommendationsAPI.deleteDuplicateSceneGroup(
                   sourceSceneId,
                   activeMatches.map(function(match) { return match.recommendation_id; }),
-                  false,
+                  true,
                 );
                 showSuccessAndReturn(deleteBtn, 'Deleted!');
               } catch (e) {
@@ -2397,7 +2406,11 @@
                 enableAllDupActions();
               }
             },
-            { showDontAsk: true, storageKey: 'delete-dup-scene' }
+            {
+              showDontAsk: true,
+              storageKey: 'delete-dup-scene',
+              htmlBody: 'Permanently delete source scene and its file?' + sourceTitleBlock + 'All current duplicate matches for this source will be closed. This cannot be undone.',
+            }
           );
         });
       }
@@ -2442,7 +2455,7 @@
   // ==================== Confirmation Modal ====================
 
   function showConfirmModal(message, onConfirm, options = {}) {
-    const { showDontAsk = false, storageKey = null } = options;
+    const { showDontAsk = false, storageKey = null, htmlBody = null } = options;
 
     // Check "don't ask again"
     if (storageKey && localStorage.getItem(`ss-skip-confirm-${storageKey}`) === '1') {
@@ -2459,7 +2472,11 @@
 
     const body = document.createElement('div');
     body.style.cssText = 'font-size:0.95rem;line-height:1.5;margin-bottom:1rem;color:#fff;';
-    body.textContent = message;
+    if (htmlBody) {
+      body.innerHTML = htmlBody;
+    } else {
+      body.textContent = message;
+    }
     modal.appendChild(body);
 
     let dontAskCheckbox = null;
