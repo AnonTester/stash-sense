@@ -1,3 +1,22 @@
+## 2026-06-09
+
+### 0.7.0
+- Feature: Creating a new performer, studio, or tag from a stashbox match now
+  scrapes the full entity profile from the stashbox endpoint immediately after
+  the local record is created, rather than leaving it with only name/stash_id.
+  - Performers: image, birthdate, height, measurements, career length,
+    ethnicity, country, eye/hair colour, breast type, tattoos, piercings,
+    URLs, disambiguation and aliases are all applied in a follow-up update.
+  - Studios: image/logo, URLs, and parent studio are applied. If the parent
+    studio does not yet exist locally it is auto-created and linked (same
+    logic as the existing upstream scene change flow).
+  - Tags: image/logo, description, aliases, and parent tags are applied.
+    Missing parent tags are auto-created and linked before setting parent_ids.
+  - Enrichment failures are logged at WARNING level but do not fail the
+    creation — the entity is always returned successfully.
+- Stashbox schema: TAG_FIELDS and STUDIO_FIELDS fragments now include
+  `images { id url }` and TAG_FIELDS also includes `parent_tags { id name }`.
+
 ## 2026-06-08
 
 ### 0.6.0

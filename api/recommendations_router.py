@@ -1958,6 +1958,215 @@ async def _resolve_stashbox_studio_to_local(
     return new_studio["id"]
 
 
+def _get_stashbox_client(endpoint: str):
+    """Get or create a StashBoxClient for the given endpoint."""
+    from stashbox_connection_manager import get_connection_manager
+    mgr = get_connection_manager()
+    sbc = mgr.get_client(endpoint)
+    if not sbc:
+        from stashbox_client import StashBoxClient
+        sbc = StashBoxClient(endpoint)
+    return sbc
+
+
+async def _enrich_performer_after_create(
+    stash, performer_id: str, stashbox_id: str, endpoint: str
+) -> None:
+    """Fetch full performer details from stashbox and update the newly created local performer."""
+    try:
+        sbc = _get_stashbox_client(endpoint)
+        upstream = await sbc.get_performer(stashbox_id)
+        if not upstream:
+            return
+
+        from upstream_field_mapper import normalize_upstream_performer
+        normalized = normalize_upstream_performer(upstream)
+
+        update_fields: dict = {}
+
+        for field in ("disambiguation", "gender", "country", "eye_color", "hair_color",
+                      "ethnicity", "birthdate", "death_date", "tattoos", "piercings"):
+            if normalized.get(field) is not None:
+                update_fields[field] = normalized[field]
+
+        if normalized.get("aliases"):
+            update_fields["alias_list"] = normalized["aliases"]
+
+        if normalized.get("height") is not None:
+            try:
+                update_fields["height_cm"] = int(normalized["height"])
+            except (TypeError, ValueError):
+                pass
+
+        if normalized.get("breast_type") is not None:
+            update_fields["fake_tits"] = normalized["breast_type"]
+
+        # Measurement fields → compound string "38F-24-35"
+        cup = normalized.get("cup_size") or ""
+        band = normalized.get("band_size")
+        waist = normalized.get("waist_size")
+        hip = normalized.get("hip_size")
+        if any(x is not None and x != "" for x in (cup, band, waist, hip)):
+            bust = f"{band or ''}{cup}"
+            parts = [bust, str(waist) if waist is not None else "", str(hip) if hip is not None else ""]
+            measurements = "-".join(parts).rstrip("-")
+            if measurements:
+                update_fields["measurements"] = measurements
+
+        # career years → compound "YYYY-YYYY"
+        start_year = normalized.get("career_start_year")
+        end_year = normalized.get("career_end_year")
+        if start_year or end_year:
+            update_fields["career_length"] = f"{start_year or ''}-{end_year or ''}".rstrip("-")
+
+        if normalized.get("urls"):
+            update_fields["urls"] = normalized["urls"]
+
+        images = upstream.get("images") or []
+        if images:
+            update_fields["image"] = images[0]["url"]
+
+        if update_fields:
+            await stash.update_performer(performer_id, **update_fields)
+            logger.debug(
+                "Enriched performer %s from stashbox %s (fields: %s)",
+                performer_id, stashbox_id, ", ".join(update_fields.keys()),
+            )
+    except Exception as exc:
+        logger.warning(
+            "Failed to enrich performer %s from stashbox %s: %s",
+            performer_id, stashbox_id, exc,
+        )
+
+
+async def _enrich_studio_after_create(
+    stash, studio_id: str, stashbox_id: str, endpoint: str
+) -> None:
+    """Fetch full studio details from stashbox and update the newly created local studio."""
+    try:
+        sbc = _get_stashbox_client(endpoint)
+        upstream = await sbc.get_studio(stashbox_id)
+        if not upstream:
+            return
+
+        update_fields: dict = {}
+
+        images = upstream.get("images") or []
+        if images:
+            update_fields["image"] = images[0]["url"]
+
+        urls = [u.get("url") if isinstance(u, dict) else u for u in (upstream.get("urls") or [])]
+        if urls:
+            update_fields["urls"] = urls
+
+        parent = upstream.get("parent")
+        if parent and parent.get("id"):
+            local_parent_id = await _resolve_stashbox_studio_to_local(stash, parent["id"], endpoint)
+            if local_parent_id:
+                update_fields["parent_id"] = local_parent_id
+
+        if update_fields:
+            await stash.update_studio(studio_id, **update_fields)
+            logger.debug(
+                "Enriched studio %s from stashbox %s (fields: %s)",
+                studio_id, stashbox_id, ", ".join(update_fields.keys()),
+            )
+    except Exception as exc:
+        logger.warning(
+            "Failed to enrich studio %s from stashbox %s: %s",
+            studio_id, stashbox_id, exc,
+        )
+
+
+async def _find_or_create_local_tag_by_stashbox_id(
+    stash, endpoint: str, stashbox_tag_id: str, tag_name: str
+) -> Optional[str]:
+    """Find a local tag by stashbox ID (or name), creating it minimally if absent."""
+    query = """
+    query FindTagByStashBoxID($tag_filter: TagFilterType) {
+      findTags(tag_filter: $tag_filter, filter: { per_page: 1 }) {
+        tags { id name }
+      }
+    }
+    """
+    data = await stash._execute(query, {
+        "tag_filter": {
+            "stash_id_endpoint": {
+                "endpoint": endpoint,
+                "stash_id": stashbox_tag_id,
+                "modifier": "EQUALS",
+            }
+        }
+    })
+    tags = (data.get("findTags") or {}).get("tags") or []
+    if tags:
+        return tags[0]["id"]
+
+    existing = await _link_existing_tag_by_name_or_alias(stash, tag_name, endpoint, stashbox_tag_id)
+    if existing:
+        return existing["id"]
+
+    try:
+        created = await stash.create_tag(
+            name=tag_name,
+            stash_ids=[{"endpoint": endpoint, "stash_id": stashbox_tag_id}],
+        )
+        logger.debug("Created parent tag '%s' (local ID: %s)", tag_name, created.get("id"))
+        return created["id"]
+    except Exception as exc:
+        logger.warning("Failed to create parent tag '%s' (stashbox %s): %s", tag_name, stashbox_tag_id, exc)
+        return None
+
+
+async def _enrich_tag_after_create(
+    stash, tag_id: str, stashbox_id: str, endpoint: str
+) -> None:
+    """Fetch full tag details from stashbox and update the newly created local tag."""
+    try:
+        sbc = _get_stashbox_client(endpoint)
+        upstream = await sbc.get_tag(stashbox_id)
+        if not upstream:
+            return
+
+        update_fields: dict = {}
+
+        images = upstream.get("images") or []
+        if images:
+            update_fields["image"] = images[0]["url"]
+
+        if upstream.get("description"):
+            update_fields["description"] = upstream["description"]
+
+        if upstream.get("aliases"):
+            update_fields["aliases"] = upstream["aliases"]
+
+        parent_tags = upstream.get("parent_tags") or []
+        parent_ids = []
+        for ptag in parent_tags:
+            ptag_stashbox_id = ptag.get("id")
+            ptag_name = ptag.get("name", "")
+            if ptag_stashbox_id:
+                local_id = await _find_or_create_local_tag_by_stashbox_id(
+                    stash, endpoint, ptag_stashbox_id, ptag_name
+                )
+                if local_id:
+                    parent_ids.append(local_id)
+        if parent_ids:
+            update_fields["parent_ids"] = parent_ids
+
+        if update_fields:
+            await stash.update_tag(tag_id, **update_fields)
+            logger.debug(
+                "Enriched tag %s from stashbox %s (fields: %s)",
+                tag_id, stashbox_id, ", ".join(update_fields.keys()),
+            )
+    except Exception as exc:
+        logger.warning(
+            "Failed to enrich tag %s from stashbox %s: %s",
+            tag_id, stashbox_id, exc,
+        )
+
+
 class CreatePerformerRequest(BaseModel):
     """Request to create a performer from StashBox data."""
     stashbox_data: dict
@@ -2032,7 +2241,7 @@ async def _create_performer_from_stashbox(stash, stashbox_data: dict, endpoint: 
         fields["gender"] = stashbox_data["gender"]
     fields["stash_ids"] = [{"endpoint": endpoint, "stash_id": stashbox_id}]
     try:
-        return await stash.create_performer(**fields)
+        created = await stash.create_performer(**fields)
     except RuntimeError as exc:
         if "already exists" not in str(exc).lower():
             raise
@@ -2045,6 +2254,8 @@ async def _create_performer_from_stashbox(stash, stashbox_data: dict, endpoint: 
         if existing:
             return existing
         raise
+    await _enrich_performer_after_create(stash, created["id"], stashbox_id, endpoint)
+    return created
 
 
 def _normalize_endpoint_for_compare(endpoint: Optional[str]) -> str:
@@ -2317,7 +2528,7 @@ async def _create_tag_from_stashbox(stash, stashbox_data: dict, endpoint: str, s
         fields["aliases"] = stashbox_data["aliases"]
     fields["stash_ids"] = [{"endpoint": endpoint, "stash_id": stashbox_id}]
     try:
-        return await stash.create_tag(**fields)
+        created = await stash.create_tag(**fields)
     except RuntimeError as exc:
         # Handle race/duplicate conflicts: tag was created/exists locally already.
         if "already exists" not in str(exc).lower():
@@ -2326,6 +2537,8 @@ async def _create_tag_from_stashbox(stash, stashbox_data: dict, endpoint: str, s
         if existing:
             return existing
         raise
+    await _enrich_tag_after_create(stash, created["id"], stashbox_id, endpoint)
+    return created
 
 
 def _studio_matches_name_or_alias(studio: dict, expected_name: str) -> bool:
@@ -2380,7 +2593,7 @@ async def _create_studio_from_stashbox(stash, stashbox_data: dict, endpoint: str
         for u in (stashbox_data.get("urls") or [])
     ]
     try:
-        return await stash.create_studio(
+        created = await stash.create_studio(
             name=studio_name,
             stash_ids=[{"endpoint": endpoint, "stash_id": stashbox_id}],
             urls=urls if urls else None,
@@ -2392,6 +2605,8 @@ async def _create_studio_from_stashbox(stash, stashbox_data: dict, endpoint: str
         if existing:
             return existing
         raise
+    await _enrich_studio_after_create(stash, created["id"], stashbox_id, endpoint)
+    return created
 
 
 async def _apply_scene_update(

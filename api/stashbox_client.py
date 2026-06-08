@@ -60,6 +60,8 @@ TAG_FIELDS = """
         name
         group
     }
+    parent_tags { id name }
+    images { id url }
     deleted
     created
     updated
@@ -71,6 +73,7 @@ STUDIO_FIELDS = """
     name
     urls { url }
     parent { id name }
+    images { id url }
     deleted
     created
     updated
