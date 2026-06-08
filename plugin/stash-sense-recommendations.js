@@ -326,6 +326,19 @@
     async acceptSceneTagOnlyChange(recId) {
       return apiCall('rec_accept_scene_tag_only_change', { rec_id: recId });
     },
+
+    async sceneTagOnlyStats() {
+      return apiCall('rec_scene_tag_only_stats', {});
+    },
+    async performerUrlOnlyStats() {
+      return apiCall('rec_performer_url_only_stats', {});
+    },
+    async fingerprintMatchStats() {
+      return apiCall('rec_fingerprint_match_stats', {});
+    },
+    async bulkAcceptStats(type) {
+      return apiCall('rec_bulk_accept_stats', { type });
+    },
   };
 
   /**
@@ -970,6 +983,7 @@
             offset: 0,
           });
 
+          RecommendationsAPI.bulkAcceptStats(currentState.type).catch(() => null);
           const batchChanges = computeBatchChanges(allPending.recommendations);
 
           if (batchChanges.length === 0) {
@@ -1015,6 +1029,7 @@
         acceptAllFpBtn.disabled = true;
         acceptAllFpBtn.textContent = 'Accepting...';
         try {
+          RecommendationsAPI.fingerprintMatchStats().catch(() => null);
           const result = await RecommendationsAPI.acceptAllFingerprintMatches();
           acceptAllFpBtn.textContent = `Accepted ${result.accepted_count}!`;
           acceptAllFpBtn.classList.add('ss-btn-success');
@@ -1043,8 +1058,10 @@
             offset: 0,
           });
 
-          const tagUrlCodeOnlyRecs = (allPending.recommendations || []).filter(rec => isTagUrlCodeOnlySceneChangeDetails(rec.details));
+          const allSceneChanges = allPending.recommendations || [];
+          const tagUrlCodeOnlyRecs = allSceneChanges.filter(rec => isTagUrlCodeOnlySceneChangeDetails(rec.details));
           const total = tagUrlCodeOnlyRecs.length;
+          RecommendationsAPI.sceneTagOnlyStats().catch(() => null);
           if (total === 0) {
             acceptAllTagOnlyBtn.textContent = 'No tag/URL/code-only changes';
             setTimeout(() => {
@@ -1146,6 +1163,7 @@
 
           const urlOnlyRecs = (allPending.recommendations || []).filter(rec => isUrlOnlyPerformerChangeDetails(rec.details));
           const total = urlOnlyRecs.length;
+          RecommendationsAPI.performerUrlOnlyStats().catch(() => null);
           if (total === 0) {
             acceptAllPerformerUrlBtn.textContent = 'No URL-only changes';
             setTimeout(() => {

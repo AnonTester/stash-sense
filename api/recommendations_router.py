@@ -2868,6 +2868,28 @@ async def _apply_scene_tag_only_recommendation(stash, db, rec) -> dict:
 
     details = current.details or {}
     if current.type != "upstream_scene_changes" or not _is_tag_url_code_only_scene_change(details):
+        if current.type != "upstream_scene_changes":
+            _rejection_reason = f"wrong type: {current.type!r}"
+        else:
+            _blocking = []
+            for _ch in (details.get("changes") or []):
+                _f = str(_ch.get("field") or "")
+                if _f not in _SCENE_BULK_ALLOWED_SIMPLE_FIELDS:
+                    _blocking.append(f"field={_f!r}")
+            if details.get("studio_change"):
+                _blocking.append("studio_change")
+            _pc = details.get("performer_changes") or {}
+            if _pc.get("added") or _pc.get("removed"):
+                _blocking.append(f"performer_changes(added={len(_pc.get('added') or [])},removed={len(_pc.get('removed') or [])})")
+            _tc = details.get("tag_changes") or {}
+            _sc = details.get("changes") or []
+            if not _tc.get("added") and not _tc.get("removed") and not _sc:
+                _blocking.append("no_tag_or_simple_changes")
+            _rejection_reason = ", ".join(_blocking) if _blocking else "unknown"
+        logger.debug(
+            "Rec %s rejected as not tag/url/code-only: %s | detail_keys=%s",
+            rec.id, _rejection_reason, sorted(details.keys()),
+        )
         raise RuntimeError(
             f"Recommendation {rec.id} is not a tag/url/code-only upstream scene change"
         )
@@ -3120,6 +3142,77 @@ async def accept_all_fingerprint_matches(
     return {"success": True, "accepted_count": accepted}
 
 
+@router.post("/actions/scene-tag-only-stats")
+async def scene_tag_only_stats():
+    """Count pending upstream_scene_changes by tag/URL/code-only filter eligibility and log to debug."""
+    db = get_rec_db()
+    recs = db.get_recommendations(status="pending", type="upstream_scene_changes", limit=100000)
+    total = len(recs)
+    matching = sum(1 for r in recs if _is_tag_url_code_only_scene_change(r.details or {}))
+    non_matching = total - matching
+    logger.debug(
+        "Tag/URL/code-only filter stats: %d pending upstream_scene_changes, %d match filter, %d do not match",
+        total, matching, non_matching,
+    )
+    return {"total": total, "matching": matching, "non_matching": non_matching}
+
+
+@router.post("/actions/performer-url-only-stats")
+async def performer_url_only_stats():
+    """Count pending upstream_performer_changes by URL-only filter eligibility and log to debug."""
+    db = get_rec_db()
+    recs = db.get_recommendations(status="pending", type="upstream_performer_changes", limit=100000)
+    total = len(recs)
+    matching = sum(1 for r in recs if _is_url_only_performer_change(r.details or {}))
+    non_matching = total - matching
+    logger.debug(
+        "Performer URL-only filter stats: %d pending upstream_performer_changes, %d match filter, %d do not match",
+        total, matching, non_matching,
+    )
+    return {"total": total, "matching": matching, "non_matching": non_matching}
+
+
+@router.post("/actions/fingerprint-match-stats")
+async def fingerprint_match_stats():
+    """Count pending scene_fingerprint_match by high_confidence flag and log to debug."""
+    db = get_rec_db()
+    recs = db.get_recommendations(status="pending", type="scene_fingerprint_match", limit=100000)
+    total = len(recs)
+    high_conf = sum(1 for r in recs if (r.details or {}).get("high_confidence"))
+    logger.debug(
+        "Fingerprint match stats: %d pending scene_fingerprint_match, %d high_confidence, %d not",
+        total, high_conf, total - high_conf,
+    )
+    return {"total": total, "high_confidence": high_conf, "non_high_confidence": total - high_conf}
+
+
+class BulkAcceptStatsRequest(BaseModel):
+    type: str
+
+
+@router.post("/actions/bulk-accept-stats")
+async def bulk_accept_stats(request: BulkAcceptStatsRequest):
+    """Count pending recommendations of a type with any changes and log to debug.
+
+    Used by the Accept All Changes button for upstream performer/tag/studio changes.
+    Scenes are excluded from batch accept (require individual review).
+    """
+    if request.type == "upstream_scene_changes":
+        logger.debug(
+            "Bulk accept stats for upstream_scene_changes: scenes excluded from batch accept (require individual review)",
+        )
+        return {"total": 0, "with_changes": 0, "note": "scenes excluded from batch accept"}
+    db = get_rec_db()
+    recs = db.get_recommendations(status="pending", type=request.type, limit=100000)
+    total = len(recs)
+    with_changes = sum(1 for r in recs if (r.details or {}).get("changes"))
+    logger.debug(
+        "Bulk accept stats for %s: %d total pending, %d have changes",
+        request.type, total, with_changes,
+    )
+    return {"total": total, "with_changes": with_changes}
+
+
 @router.post("/actions/accept-all-scene-tag-only-changes")
 async def accept_all_scene_tag_only_changes():
     """Accept pending scene recommendations with only tag/URL/code changes."""
@@ -3150,6 +3243,7 @@ async def accept_scene_tag_only_change(request: AcceptSceneTagOnlyChangeRequest)
             db.delete_recommendation(rec.id)
             logger.debug("Deleted stale scene rec rec_id=%s scene_id=%s", rec.id, scene_id)
             return {"success": True, "action": "deleted_stale_scene", "rec_id": rec.id, "scene_id": scene_id}
+        logger.debug("accept-scene-tag-only-change returned 400 rec_id=%s scene_id=%s: %s", rec.id, scene_id, msg)
         raise HTTPException(status_code=400, detail=msg)
     except Exception as e:
         logger.warning(

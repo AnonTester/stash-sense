@@ -1,5 +1,27 @@
 ## 2026-06-08
 
+### 0.5.17
+- Enhancement: When a tag/URL/code-only scene change recommendation is
+  rejected (returns HTTP 400), the sidecar now logs the reason at DEBUG level.
+  Previously only the action start and the access log entry were visible,
+  leaving no trace of why the 400 was returned. The debug log now shows the
+  specific blocking condition (e.g. field='title', studio_change,
+  performer_changes, no_tag_or_simple_changes) and the detail keys present in
+  the recommendation, making it possible to diagnose JS/Python filter
+  mismatches. A second DEBUG entry at the HTTPException raise site confirms
+  the 400 and echoes the message.
+- Enhancement: All four bulk operation buttons now log filter stats to the
+  sidecar debug log (fire-and-forget, non-blocking) before processing begins:
+  - "Accept All Tag/URL/Code Only Changes": logs total pending
+    upstream_scene_changes vs how many match the tag/url/code-only filter.
+  - "Accept All URL Only Changes": logs total pending
+    upstream_performer_changes vs how many are URL-only.
+  - "Accept All High-Confidence" (fingerprint matches): logs total pending
+    scene_fingerprint_match vs how many have high_confidence set.
+  - "Accept All Changes" (performers/tags/studios): logs total pending
+    recommendations of the current type and how many have any changes.
+    upstream_scene_changes is noted as excluded from batch accept.
+
 ### 0.5.16
 - UI: "Enable Anonymisation?" confirmation modal now has 20px inner padding
   so text and buttons no longer run to the edge of the card background.

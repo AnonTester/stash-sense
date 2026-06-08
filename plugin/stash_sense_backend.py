@@ -900,6 +900,18 @@ def handle_recommendations(mode, args, sidecar_url):
             timeout=300,
         )
 
+    elif mode == "rec_scene_tag_only_stats":
+        return sidecar_post(sidecar_url, "/recommendations/actions/scene-tag-only-stats", {})
+
+    elif mode == "rec_performer_url_only_stats":
+        return sidecar_post(sidecar_url, "/recommendations/actions/performer-url-only-stats", {})
+
+    elif mode == "rec_fingerprint_match_stats":
+        return sidecar_post(sidecar_url, "/recommendations/actions/fingerprint-match-stats", {})
+
+    elif mode == "rec_bulk_accept_stats":
+        return sidecar_post(sidecar_url, "/recommendations/actions/bulk-accept-stats", {"type": args.get("type", "")})
+
     elif mode == "rec_accept_all_performer_url_only_changes":
         return sidecar_post(
             sidecar_url,
