@@ -1,5 +1,21 @@
 ## 2026-06-08
 
+### 0.5.14
+- Enhancement: Debug log now includes the sidecar version number in the
+  activation message (e.g. "Debug logging enabled v0.5.14 → ...").
+- Enhancement: All incoming HTTP requests to the sidecar are now logged at
+  DEBUG level with method, path, query string, HTTP status code, and duration
+  in milliseconds (e.g. "POST /recommendations/actions/merge-scenes → 200
+  (342ms)"). This makes it possible to see exactly which endpoints are hit
+  and how long each call takes.
+- Enhancement: Key action endpoints now log at DEBUG level with the relevant
+  entity IDs and field names (but not full payload data): merge-performers,
+  merge-scenes, delete-scene, delete-duplicate-scene-group, update-performer,
+  update-tag, update-studio, update-scene, accept-fingerprint-match,
+  accept-all-fingerprint-matches, accept-all-scene-tag-only-changes,
+  accept-scene-tag-only-change (start and completion), accept-all-performer-
+  url-only-changes, batch-dismiss, dismiss, resolve, dismiss-upstream.
+
 ### 0.5.13
 - Fix: "Accept All Tag/URL/Code Only Changes" for upstream scene changes no
   longer shows a generic "accepting failed" error with no detail when one or

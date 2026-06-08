@@ -928,6 +928,7 @@ async def get_recommendation(rec_id: int):
 @router.post("/{rec_id}/resolve", response_model=SuccessResponse)
 async def resolve_recommendation(rec_id: int, request: ResolveRequest):
     """Mark a recommendation as resolved."""
+    logger.debug("Action: resolve rec_id=%s action=%s", rec_id, request.action)
     db = get_rec_db()
     success = db.resolve_recommendation(rec_id, request.action, request.details)
     if not success:
@@ -938,6 +939,7 @@ async def resolve_recommendation(rec_id: int, request: ResolveRequest):
 @router.post("/{rec_id}/dismiss", response_model=SuccessResponse)
 async def dismiss_recommendation(rec_id: int, request: DismissRequest = None):
     """Dismiss a recommendation (won't be re-created)."""
+    logger.debug("Action: dismiss rec_id=%s", rec_id)
     db = get_rec_db()
     reason = request.reason if request else None
     success = db.dismiss_recommendation(rec_id, reason)
@@ -1081,6 +1083,7 @@ class MergePerformersRequest(BaseModel):
 @router.post("/actions/merge-performers")
 async def merge_performers(request: MergePerformersRequest):
     """Execute a performer merge. Deletes source performers after merge."""
+    logger.debug("Action: merge-performers source_ids=%s destination_id=%s", request.source_ids, request.destination_id)
     stash = get_stash_client()
     try:
         result = await stash.merge_performers(request.source_ids, request.destination_id)
@@ -1106,6 +1109,7 @@ class DeleteSceneFilesRequest(BaseModel):
 @router.post("/actions/delete-scene-files")
 async def delete_scene_files(request: DeleteSceneFilesRequest):
     """Delete files from a scene, keeping the specified file."""
+    logger.debug("Action: delete-scene-files scene_id=%s keep_file_id=%s delete_file_ids=%s", request.scene_id, request.keep_file_id, request.file_ids_to_delete)
     stash = get_stash_client()
     try:
         result = await stash.delete_scene_files(
@@ -1128,6 +1132,7 @@ class MergeScenesRequest(BaseModel):
 @router.post("/actions/merge-scenes")
 async def merge_scenes(request: MergeScenesRequest):
     """Execute a scene merge via Stash's sceneMerge mutation."""
+    logger.debug("Action: merge-scenes source_ids=%s destination_id=%s", request.source_ids, request.destination_id)
     stash = get_stash_client()
     db = get_rec_db()
     try:
@@ -1144,6 +1149,7 @@ async def merge_scenes(request: MergeScenesRequest):
 @router.post("/actions/merge-duplicate-scene-group")
 async def merge_duplicate_scene_group(request: MergeDuplicateSceneGroupRequest):
     """Merge selected matched scenes into the grouped source scene."""
+    logger.debug("Action: merge-duplicate-scene-group source_scene_id=%s match_scene_ids=%s rec_ids=%s", request.source_scene_id, request.selected_match_scene_ids, request.selected_recommendation_ids)
     if not request.source_scene_id or not request.selected_match_scene_ids:
         raise HTTPException(status_code=400, detail="source_scene_id and selected_match_scene_ids are required")
 
@@ -1189,6 +1195,7 @@ class DeleteSceneRequest(BaseModel):
 @router.post("/actions/delete-scene")
 async def delete_scene(request: DeleteSceneRequest):
     """Delete a scene from Stash."""
+    logger.debug("Action: delete-scene scene_id=%s delete_file=%s", request.scene_id, request.delete_file)
     stash = get_stash_client()
     db = get_rec_db()
     try:
@@ -1205,6 +1212,7 @@ async def delete_scene(request: DeleteSceneRequest):
 @router.post("/actions/delete-duplicate-scene-match")
 async def delete_duplicate_scene_match(request: DeleteDuplicateSceneMatchRequest):
     """Delete one matched scene and resolve its grouped duplicate-scene recommendation."""
+    logger.debug("Action: delete-duplicate-scene-match source_scene_id=%s match_scene_id=%s rec_id=%s", request.source_scene_id, request.match_scene_id, request.recommendation_id)
     if not request.source_scene_id or not request.match_scene_id:
         raise HTTPException(status_code=400, detail="source_scene_id and match_scene_id are required")
 
@@ -1232,6 +1240,7 @@ async def delete_duplicate_scene_match(request: DeleteDuplicateSceneMatchRequest
 @router.post("/actions/delete-duplicate-scene-group")
 async def delete_duplicate_scene_group(request: DeleteDuplicateSceneGroupRequest):
     """Delete the grouped source scene and resolve the reviewed duplicate set."""
+    logger.debug("Action: delete-duplicate-scene-group source_scene_id=%s rec_ids=%s", request.source_scene_id, request.recommendation_ids)
     if not request.source_scene_id:
         raise HTTPException(status_code=400, detail="source_scene_id is required")
 
@@ -1259,6 +1268,7 @@ async def delete_duplicate_scene_group(request: DeleteDuplicateSceneGroupRequest
 @router.post("/actions/merge-source-into-duplicate-scene-match")
 async def merge_source_into_duplicate_scene_match(request: MergeSourceIntoDuplicateSceneMatchRequest):
     """Keep one matched scene, merge the source into it, then close sibling matches."""
+    logger.debug("Action: merge-source-into-duplicate-scene-match source_scene_id=%s keeper_match_scene_id=%s", request.source_scene_id, request.keeper_match_scene_id)
     if not request.source_scene_id or not request.keeper_match_scene_id:
         raise HTTPException(status_code=400, detail="source_scene_id and keeper_match_scene_id are required")
 
@@ -1556,6 +1566,7 @@ async def update_performer_fields(request: UpdatePerformerRequest, entity_type: 
     """
     from upstream_field_mapper import parse_measurements, parse_career_length
 
+    logger.debug("Action: update-performer performer_id=%s fields=%s", request.performer_id, sorted(request.fields.keys()))
     stash = get_stash_client()
     fields = dict(request.fields)
     performer_id = request.performer_id
@@ -1783,6 +1794,7 @@ async def update_tag_fields(request: UpdateTagRequest):
     Tags have simple 1:1 field mapping — no compound fields like performers.
     Stash TagUpdateInput accepts: name, description, aliases directly.
     """
+    logger.debug("Action: update-tag tag_id=%s fields=%s", request.tag_id, sorted(request.fields.keys()))
     stash = get_stash_client()
     fields = dict(request.fields)
     tag_id = request.tag_id
@@ -1846,6 +1858,7 @@ async def update_studio_fields(request: UpdateStudioRequest):
     Special handling for parent_studio: resolves StashBox parent UUID to
     local studio ID, auto-importing the parent if not found locally.
     """
+    logger.debug("Action: update-studio studio_id=%s fields=%s", request.studio_id, sorted(request.fields.keys()))
     stash = get_stash_client()
     fields = dict(request.fields)
     studio_id = request.studio_id
@@ -2562,6 +2575,7 @@ async def link_entity_action(request: LinkEntityRequest):
 @router.post("/actions/update-scene")
 async def update_scene_fields(request: UpdateSceneRequest):
     """Apply selected upstream changes to a scene."""
+    logger.debug("Action: update-scene scene_id=%s fields=%s", request.scene_id, sorted((request.fields or {}).keys()))
     stash = get_stash_client()
     try:
         result = await _apply_scene_update(
@@ -2612,8 +2626,9 @@ class UpstreamDismissRequest(BaseModel):
 @router.post("/{rec_id}/dismiss-upstream")
 async def dismiss_upstream_recommendation(rec_id: int, request: UpstreamDismissRequest = None):
     """Dismiss an upstream recommendation with permanent option."""
-    db = get_rec_db()
     permanent = request.permanent if request else False
+    logger.debug("Action: dismiss-upstream rec_id=%s permanent=%s", rec_id, permanent)
+    db = get_rec_db()
     reason = request.reason if request else None
     success = db.dismiss_recommendation(rec_id, reason=reason, permanent=permanent)
     if not success:
@@ -2717,6 +2732,7 @@ async def _accept_fingerprint_match(
 @router.post("/actions/accept-fingerprint-match", response_model=SuccessResponse)
 async def accept_fingerprint_match(request: AcceptFingerprintMatchRequest):
     """Accept a scene fingerprint match — links the stash_id to the local scene."""
+    logger.debug("Action: accept-fingerprint-match rec_id=%s scene_id=%s stash_id=%s", request.recommendation_id, request.scene_id, request.stash_id)
     stash = get_stash_client()
     db = get_rec_db()
     await _accept_fingerprint_match(
@@ -2858,6 +2874,7 @@ async def _apply_scene_tag_only_recommendation(stash, db, rec) -> dict:
 
     scene_id = str(details.get("scene_id") or "").strip()
     endpoint = str(details.get("endpoint") or "").strip()
+    logger.debug("Applying tag/url/code-only scene change rec_id=%s scene_id=%s endpoint=%s", rec.id, scene_id, endpoint)
     tag_changes = details.get("tag_changes") or {}
     simple_changes = details.get("changes") or []
     if not scene_id or not endpoint:
@@ -2953,6 +2970,7 @@ async def _apply_scene_tag_only_recommendation(stash, db, rec) -> dict:
         action=action,
         details={"bulk": "tag_url_code_only_scene_changes"},
     )
+    logger.debug("Completed tag/url/code-only scene change rec_id=%s scene_id=%s action=%s ensured_tags=%d", current.id, scene_id, action, ensured_tags)
     return {
         "rec_id": current.id,
         "scene_id": scene_id,
@@ -3081,9 +3099,11 @@ async def _accept_all_performer_url_only_changes(stash, db) -> dict:
 @router.post("/actions/accept-all-performer-url-only-changes")
 async def accept_all_performer_url_only_changes():
     """Accept pending performer recommendations with only URL changes."""
+    logger.debug("Action: accept-all-performer-url-only-changes started")
     stash = get_stash_client()
     db = get_rec_db()
     result = await _accept_all_performer_url_only_changes(stash, db)
+    logger.debug("Action: accept-all-performer-url-only-changes done %s", result)
     return {"success": True, **result}
 
 
@@ -3092,18 +3112,22 @@ async def accept_all_fingerprint_matches(
     request: AcceptAllFingerprintMatchesRequest = AcceptAllFingerprintMatchesRequest(),
 ):
     """Accept all high-confidence scene fingerprint matches."""
+    logger.debug("Action: accept-all-fingerprint-matches endpoint_filter=%s", request.endpoint)
     stash = get_stash_client()
     db = get_rec_db()
     accepted = await _accept_all_fingerprint_matches(stash, db, request.endpoint)
+    logger.debug("Action: accept-all-fingerprint-matches done accepted=%d", accepted)
     return {"success": True, "accepted_count": accepted}
 
 
 @router.post("/actions/accept-all-scene-tag-only-changes")
 async def accept_all_scene_tag_only_changes():
     """Accept pending scene recommendations with only tag/URL/code changes."""
+    logger.debug("Action: accept-all-scene-tag-only-changes started")
     stash = get_stash_client()
     db = get_rec_db()
     result = await _accept_all_scene_tag_only_changes(stash, db)
+    logger.debug("Action: accept-all-scene-tag-only-changes done %s", result)
     return {"success": True, **result}
 
 
@@ -3116,6 +3140,7 @@ async def accept_scene_tag_only_change(request: AcceptSceneTagOnlyChangeRequest)
     if not rec:
         raise HTTPException(status_code=404, detail="Recommendation not found")
     scene_id = str((rec.details or {}).get("scene_id") or "?")
+    logger.debug("Action: accept-scene-tag-only-change rec_id=%s scene_id=%s", request.rec_id, scene_id)
     try:
         result = await _apply_scene_tag_only_recommendation(stash, db, rec)
         return {"success": True, **result}
@@ -3141,6 +3166,7 @@ class BatchDismissRequest(BaseModel):
 @router.post("/actions/batch-dismiss")
 async def batch_dismiss(request: BatchDismissRequest):
     """Dismiss all pending recommendations of a given type."""
+    logger.debug("Action: batch-dismiss type=%s permanent=%s", request.type, request.permanent)
     db = get_rec_db()
     dismissed_count = db.batch_dismiss_by_type(
         rec_type=request.type,

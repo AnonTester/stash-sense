@@ -21,8 +21,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI
+import time
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import DatabaseConfig, MultiSignalConfig
 from recognizer import FaceRecognizer
@@ -357,6 +360,7 @@ async def lifespan(app: FastAPI):
         configure_debug_logging(
             True, data_dir,
             anonymize=bool(settings_mgr.get("debug_logging_anonymize")),
+            version=app.version,
         )
 
     # Initialize queue manager
@@ -403,7 +407,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Stash Sense API",
     description="Face recognition and recommendations engine for Stash",
-    version="0.5.13",
+    version="0.5.14",
     lifespan=lifespan,
 )
 
@@ -415,6 +419,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_access_log = logging.getLogger("access")
+
+# Paths polled on a short interval — log at DEBUG only, not INFO-level noise
+_NOISY_PATHS = frozenset({"/health", "/recommendations/counts"})
+
+
+class _AccessLogMiddleware(BaseHTTPMiddleware):
+    """Logs every incoming request at DEBUG level with method, path, status, and duration."""
+
+    async def dispatch(self, request: Request, call_next):
+        start = time.monotonic()
+        response = await call_next(request)
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        path = request.url.path
+        qs = f"?{request.url.query}" if request.url.query else ""
+        _access_log.debug(
+            "%s %s%s → %d (%dms)",
+            request.method, path, qs, response.status_code, elapsed_ms,
+        )
+        return response
+
+
+app.add_middleware(_AccessLogMiddleware)
 
 # Include routers
 app.include_router(identification_router)

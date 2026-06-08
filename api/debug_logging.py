@@ -76,7 +76,12 @@ class _CompoundRotatingHandler(RotatingFileHandler):
         return super().shouldRollover(record)
 
 
-def configure_debug_logging(enabled: bool, data_dir: Path, anonymize: bool = False) -> None:
+def configure_debug_logging(
+    enabled: bool,
+    data_dir: Path,
+    anonymize: bool = False,
+    version: Optional[str] = None,
+) -> None:
     """Add or remove the debug file handler on the root logger.
 
     Safe to call multiple times — removes any previously added handler
@@ -87,6 +92,7 @@ def configure_debug_logging(enabled: bool, data_dir: Path, anonymize: bool = Fal
         data_dir: The sidecar data directory (``DATA_DIR`` env var path).
                   Logs are written to ``data_dir/logs/``.
         anonymize: If True, apply PII redaction (names, paths → IDs only).
+        version: Optional sidecar version string for the startup log entry.
     """
     global _debug_handler
 
@@ -135,7 +141,8 @@ def configure_debug_logging(enabled: bool, data_dir: Path, anonymize: bool = Fal
     root.setLevel(logging.DEBUG)
 
     _debug_handler = handler
+    version_str = f" v{version}" if version else ""
     logger.warning(
-        "Debug logging enabled → %s (max %d MB, %d backups, anonymize=%s)",
-        log_path, _MAX_BYTES // (1024 * 1024), _BACKUP_COUNT, anonymize,
+        "Debug logging enabled%s → %s (max %d MB, %d backups, anonymize=%s)",
+        version_str, log_path, _MAX_BYTES // (1024 * 1024), _BACKUP_COUNT, anonymize,
     )
