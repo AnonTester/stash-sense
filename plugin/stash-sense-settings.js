@@ -391,15 +391,16 @@
         // Show confirmation overlay
         const overlay = SS.createElement('div', { className: 'ss-modal-overlay' });
         overlay.innerHTML = `
-          <div class="ss-modal-content" style="max-width:420px;">
+          <div class="ss-modal-content" style="max-width:420px;padding:20px;">
             <h3 style="margin:0 0 12px;">Enable Anonymisation?</h3>
             <p style="margin:0 0 16px;color:#ccc;">
               Enabling anonymisation will <strong>delete ${logs.length} existing debug log file${logs.length !== 1 ? 's' : ''}</strong>
               to prevent un-anonymised data from being mixed with anonymised entries.
+              Do you wish to proceed and delete the existing debug logs?
             </p>
             <div style="display:flex;gap:10px;justify-content:flex-end;">
               <button class="ss-btn ss-btn-secondary" id="ss-anon-cancel">Cancel</button>
-              <button class="ss-btn ss-btn-danger" id="ss-anon-confirm">Delete Logs &amp; Enable</button>
+              <button class="ss-btn ss-btn-danger" id="ss-anon-confirm">Delete Logs</button>
             </div>
           </div>
         `;

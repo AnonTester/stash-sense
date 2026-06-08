@@ -1,5 +1,12 @@
 ## 2026-06-08
 
+### 0.5.16
+- UI: "Enable Anonymisation?" confirmation modal now has 20px inner padding
+  so text and buttons no longer run to the edge of the card background.
+  Confirmation button renamed from "Delete Logs & Enable" to "Delete Logs"
+  for brevity. Description text extended with "Do you wish to proceed and
+  delete the existing debug logs?" to clarify the action.
+
 ### 0.5.15
 - Fix: "Accept All Tag/URL/Code Only Changes" no longer counts stale-scene
   recommendations as failures. When the sidecar detects that a scene no
