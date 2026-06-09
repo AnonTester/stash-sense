@@ -900,6 +900,14 @@ def handle_recommendations(mode, args, sidecar_url):
             timeout=300,
         )
 
+    elif mode == "rec_accept_scene_change":
+        return sidecar_post(
+            sidecar_url,
+            "/recommendations/actions/accept-scene-change",
+            {"rec_id": args.get("rec_id")},
+            timeout=300,
+        )
+
     elif mode == "rec_scene_tag_only_stats":
         return sidecar_post(sidecar_url, "/recommendations/actions/scene-tag-only-stats", {})
 

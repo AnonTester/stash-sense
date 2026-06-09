@@ -1,5 +1,39 @@
 ## 2026-06-09
 
+### 0.7.2
+- Feature: "Accept All Changes" in the Upstream Scene Changes view now
+  processes ALL pending scene recommendations, including those with relational
+  changes (performers, tags, studio), not only those with simple field changes.
+  - Performers and tags added upstream are looked up locally by stash_id first;
+    if not found they are created with full enrichment (image, profile, parent
+    relationships) using the same logic as the 0.7.0 creation flow.
+  - Performers and tags removed upstream are removed from the local scene.
+    Any local performers/tags not specifically in the upstream removed list are
+    preserved.
+  - Studio changes are resolved: the upstream studio is looked up by stash_id
+    or created with full enrichment (image, parent studio) and set on the scene.
+  - Simple field changes (title, date, details, code, URLs) are applied with
+    the upstream value as default.
+  - The button shows per-scene progress with an elapsed timer, and reports
+    total accepted, performers/tags created, and stale scenes removed on
+    completion.
+  - New backend endpoint: POST /recommendations/actions/accept-scene-change
+
+### 0.7.1
+- Fix: "Accept All Changes" button restored to the Upstream Scene Changes view.
+  It batches scenes with only simple field changes (title, date, details, code,
+  URLs); scenes with relational changes (performers, tags, studio) are skipped
+  and must still be reviewed individually.
+- Fix: "Accept All Tag/URL/Code Only Changes" no longer reports false failures
+  when a recommendation's `changes` list contains entries where local and
+  upstream values are identical (trivial/no-op changes). The Python filter now
+  strips such entries before checking for disallowed fields, matching the JS
+  `filterRealChanges` logic. Previously this mismatch caused the button to
+  attempt and fail on recs that JS considered tag-only but Python rejected.
+- Fix: Accept/Dismiss action buttons in upstream change list views now wrap to
+  the next row on narrow or mobile screens (flex-wrap: wrap added to
+  .ss-list-actions).
+
 ### 0.7.0
 - Feature: Creating a new performer, studio, or tag from a stashbox match now
   scrapes the full entity profile from the stashbox endpoint immediately after

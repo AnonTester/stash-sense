@@ -1133,6 +1133,7 @@
 /* Accept All button + modal styles */
 .ss-list-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
 }

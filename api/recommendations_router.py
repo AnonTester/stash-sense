@@ -3005,12 +3005,46 @@ async def _accept_all_fingerprint_matches(
 _SCENE_BULK_ALLOWED_SIMPLE_FIELDS = {"code", "urls"}
 
 
+def _is_real_field_change(change: dict) -> bool:
+    """Return True if this change represents an actual value difference.
+
+    Mirrors JS filterRealChanges: skips entries where local and upstream
+    are both empty-like or effectively equal, so the two filters agree.
+    """
+    local = change.get("local_value")
+    upstream = change.get("upstream_value")
+
+    def _empty_like(v) -> bool:
+        return v is None or v == "" or v == 0 or v == "null" or (isinstance(v, list) and len(v) == 0)
+
+    if _empty_like(local) and _empty_like(upstream):
+        return False
+    if isinstance(local, str) and isinstance(upstream, str):
+        ln, un = local.strip().lower(), upstream.strip().lower()
+        if ln == un:
+            return False
+        if (ln in ("", "null")) and (un in ("", "null")):
+            return False
+    if isinstance(local, list) and isinstance(upstream, list):
+        def _norm(v: object) -> str:
+            s = str(v).strip().lower().rstrip("/")
+            return "" if s == "null" else s
+        ls = {_norm(v) for v in local if _norm(v)}
+        us = {_norm(v) for v in upstream if _norm(v)}
+        if ls == us:
+            return False
+    if local == upstream:
+        return False
+    return True
+
+
 def _is_tag_url_code_only_scene_change(details: dict) -> bool:
     """Return True when changes are limited to tags/URLs/code only."""
     if not isinstance(details, dict):
         return False
 
-    simple_changes = details.get("changes") or []
+    all_changes = details.get("changes") or []
+    simple_changes = [c for c in all_changes if _is_real_field_change(c)]
     for change in simple_changes:
         field = str(change.get("field") or "")
         if field not in _SCENE_BULK_ALLOWED_SIMPLE_FIELDS:
@@ -3088,6 +3122,8 @@ async def _apply_scene_tag_only_recommendation(stash, db, rec) -> dict:
         else:
             _blocking = []
             for _ch in (details.get("changes") or []):
+                if not _is_real_field_change(_ch):
+                    continue
                 _f = str(_ch.get("field") or "")
                 if _f not in _SCENE_BULK_ALLOWED_SIMPLE_FIELDS:
                     _blocking.append(f"field={_f!r}")
@@ -3463,6 +3499,211 @@ async def accept_scene_tag_only_change(request: AcceptSceneTagOnlyChangeRequest)
     except Exception as e:
         logger.warning(
             "Unexpected error accepting scene tag/url/code change for rec %s (scene %s): %s",
+            rec.id, scene_id, e, exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Accept failed for rec {rec.id} (scene {scene_id}): {type(e).__name__}: {e}",
+        )
+
+
+async def _apply_full_scene_recommendation(stash, db, rec) -> dict:
+    """Accept one pending upstream scene recommendation applying ALL change types.
+
+    Applies simple field changes (upstream value as default), creates/links
+    performers, tags, and studio as needed (with full enrichment), applies
+    relational additions, and removes entities that were specifically removed
+    upstream. Any local performers/tags not in the removed list are preserved.
+    """
+    current = db.get_recommendation(rec.id)
+    if not current or current.status != "pending":
+        raise RuntimeError(f"Recommendation {rec.id} is no longer pending")
+    if current.type != "upstream_scene_changes":
+        raise RuntimeError(f"Recommendation {rec.id} is not an upstream_scene_changes rec")
+
+    details = current.details or {}
+    scene_id = str(details.get("scene_id") or "").strip()
+    endpoint = str(details.get("endpoint") or "").strip()
+    if not scene_id or not endpoint:
+        raise RuntimeError(f"Recommendation {rec.id} missing scene_id/endpoint")
+
+    logger.debug("Applying full scene change rec_id=%s scene_id=%s endpoint=%s", rec.id, scene_id, endpoint)
+
+    def _nullish_to_empty(v) -> str:
+        if v is None:
+            return ""
+        s = str(v).strip()
+        return "" if s.lower() == "null" else s
+
+    # 1. Simple field changes — take upstream value for all real changes
+    simple_fields: dict = {}
+    for change in [c for c in (details.get("changes") or []) if _is_real_field_change(c)]:
+        field = str(change.get("field") or "")
+        upstream_val = change.get("upstream_value")
+        if not field:
+            continue
+        if field == "urls":
+            if upstream_val is None:
+                simple_fields["urls"] = []
+            elif isinstance(upstream_val, list):
+                simple_fields["urls"] = [u for u in [_nullish_to_empty(v) for v in upstream_val] if u]
+            else:
+                url = _nullish_to_empty(upstream_val)
+                simple_fields["urls"] = [url] if url else []
+        else:
+            simple_fields[field] = _nullish_to_empty(upstream_val)
+
+    # 2. Tags — build next_tag_ids from current set + add − remove
+    scene_tags = await _get_scene_tags_with_stash_ids(stash, scene_id)
+    current_tag_ids = {str(t["id"]) for t in scene_tags if t.get("id") is not None}
+    next_tag_ids = set(current_tag_ids)
+    ensured_tags = 0
+
+    tag_changes = details.get("tag_changes") or {}
+    for removed in (tag_changes.get("removed") or []):
+        removed_stashbox_id = str(removed.get("id") or "").strip()
+        if not removed_stashbox_id:
+            continue
+        local_tag_id = _resolve_scene_tag_local_id(scene_tags, endpoint, removed_stashbox_id)
+        if local_tag_id:
+            next_tag_ids.discard(local_tag_id)
+
+    for added in (tag_changes.get("added") or []):
+        local_tag_id = str(((added.get("local_match") or {}).get("id") or "")).strip()
+        if not local_tag_id:
+            stashbox_id = str(added.get("id") or "").strip()
+            if not stashbox_id:
+                continue
+            # Look up existing by stash_id before creating
+            linked = await _find_linked_entity_by_stash_id(stash, "tag", endpoint, stashbox_id)
+            if linked and linked.get("id"):
+                local_tag_id = str(linked["id"])
+            else:
+                tag_payload = {"name": added.get("name", ""), "aliases": added.get("aliases") or []}
+                created_or_linked = await _create_tag_from_stashbox(stash, tag_payload, endpoint, stashbox_id)
+                local_tag_id = str(created_or_linked.get("id"))
+                ensured_tags += 1
+        if local_tag_id:
+            next_tag_ids.add(local_tag_id)
+
+    # 3. Performers — build next_performer_ids from current set + add − remove
+    current_performer_ids = set(str(p) for p in (details.get("current_performer_ids") or []))
+    next_performer_ids = set(current_performer_ids)
+    ensured_performers = 0
+
+    performer_changes = details.get("performer_changes") or {}
+    for removed in (performer_changes.get("removed") or []):
+        removed_stashbox_id = str(removed.get("id") or "").strip()
+        if not removed_stashbox_id:
+            continue
+        linked = await _find_linked_entity_by_stash_id(stash, "performer", endpoint, removed_stashbox_id)
+        if linked and linked.get("id"):
+            next_performer_ids.discard(str(linked["id"]))
+
+    for added in (performer_changes.get("added") or []):
+        local_match_id = str(((added.get("local_match") or {}).get("id") or "")).strip()
+        if not local_match_id:
+            stashbox_id = str(added.get("id") or "").strip()
+            if not stashbox_id:
+                continue
+            linked = await _find_linked_entity_by_stash_id(stash, "performer", endpoint, stashbox_id)
+            if linked and linked.get("id"):
+                local_match_id = str(linked["id"])
+            else:
+                perf_payload = {
+                    "name": added.get("name", ""),
+                    "aliases": added.get("aliases") or [],
+                    "gender": added.get("gender"),
+                }
+                created = await _create_performer_from_stashbox(stash, perf_payload, endpoint, stashbox_id)
+                local_match_id = str(created.get("id"))
+                ensured_performers += 1
+        if local_match_id:
+            next_performer_ids.add(local_match_id)
+
+    # 4. Studio — look up or create upstream studio
+    studio_id: Optional[str] = None
+    studio_change = details.get("studio_change")
+    if studio_change:
+        upstream_studio = studio_change.get("upstream") or {}
+        local_match_id = str(((upstream_studio.get("local_match") or {}).get("id") or "")).strip()
+        if not local_match_id:
+            stashbox_id = str(upstream_studio.get("id") or "").strip()
+            if stashbox_id:
+                linked = await _find_linked_entity_by_stash_id(stash, "studio", endpoint, stashbox_id)
+                if linked and linked.get("id"):
+                    local_match_id = str(linked["id"])
+                else:
+                    studio_payload = {"name": upstream_studio.get("name", "")}
+                    created = await _create_studio_from_stashbox(stash, studio_payload, endpoint, stashbox_id)
+                    local_match_id = str(created.get("id"))
+        if local_match_id:
+            studio_id = local_match_id
+
+    performers_changed = next_performer_ids != current_performer_ids
+    tags_changed = next_tag_ids != current_tag_ids
+    has_changes = bool(simple_fields) or performers_changed or tags_changed or studio_id is not None
+
+    if has_changes:
+        await _apply_scene_update(
+            stash=stash,
+            scene_id=scene_id,
+            fields=simple_fields,
+            performer_ids=sorted(next_performer_ids) if performers_changed else None,
+            tag_ids=sorted(next_tag_ids) if tags_changed else None,
+            studio_id=studio_id,
+        )
+        action = "applied"
+    else:
+        action = "accepted_no_changes"
+
+    db.resolve_recommendation(current.id, action=action, details={"bulk": "full_scene_changes"})
+    logger.debug(
+        "Completed full scene change rec_id=%s scene_id=%s action=%s ensured_performers=%d ensured_tags=%d",
+        current.id, scene_id, action, ensured_performers, ensured_tags,
+    )
+    return {
+        "rec_id": current.id,
+        "scene_id": scene_id,
+        "action": action,
+        "ensured_performers_count": ensured_performers,
+        "ensured_tags_count": ensured_tags,
+    }
+
+
+class AcceptSceneChangeRequest(BaseModel):
+    rec_id: int
+
+
+@router.post("/actions/accept-scene-change")
+async def accept_scene_change(request: AcceptSceneChangeRequest):
+    """Accept one pending upstream scene recommendation applying all change types.
+
+    Creates/links performers, tags, and studio as needed (with full enrichment
+    from the stashbox endpoint). Applies removals only for entities specifically
+    removed upstream; local-only additions are preserved.
+    """
+    stash = get_stash_client()
+    db = get_rec_db()
+    rec = db.get_recommendation(request.rec_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+    scene_id = str((rec.details or {}).get("scene_id") or "?")
+    logger.debug("Action: accept-scene-change rec_id=%s scene_id=%s", request.rec_id, scene_id)
+    try:
+        result = await _apply_full_scene_recommendation(stash, db, rec)
+        return {"success": True, **result}
+    except RuntimeError as e:
+        msg = str(e)
+        if "scene not found" in msg.lower():
+            db.delete_recommendation(rec.id)
+            logger.debug("Deleted stale scene rec rec_id=%s scene_id=%s", rec.id, scene_id)
+            return {"success": True, "action": "deleted_stale_scene", "rec_id": rec.id, "scene_id": scene_id}
+        logger.debug("accept-scene-change returned 400 rec_id=%s scene_id=%s: %s", rec.id, scene_id, msg)
+        raise HTTPException(status_code=400, detail=msg)
+    except Exception as e:
+        logger.warning(
+            "Unexpected error accepting full scene change for rec %s (scene %s): %s",
             rec.id, scene_id, e, exc_info=True,
         )
         raise HTTPException(

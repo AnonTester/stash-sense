@@ -327,6 +327,10 @@
       return apiCall('rec_accept_scene_tag_only_change', { rec_id: recId });
     },
 
+    async acceptSceneChange(recId) {
+      return apiCall('rec_accept_scene_change', { rec_id: recId });
+    },
+
     async sceneTagOnlyStats() {
       return apiCall('rec_scene_tag_only_stats', {});
     },
@@ -708,8 +712,8 @@
     const results = [];
 
     for (const rec of recommendations) {
-      // Scenes have relational fields (performers, tags, studios) that may need entity creation;
-      // skip them in batch processing — user must handle scenes individually.
+      // Scenes use a dedicated per-rec accept endpoint with full relational resolution;
+      // they are handled separately in the acceptAllBtn handler for upstream_scene_changes.
       if (rec.type === 'upstream_scene_changes') continue;
 
       const details = rec.details;
@@ -923,7 +927,7 @@
         </div>
         ${currentState.status === 'pending' ? `
         <div class="ss-list-actions">
-          ${currentState.type === 'upstream_performer_changes' || currentState.type === 'upstream_tag_changes' || currentState.type === 'upstream_studio_changes'
+          ${currentState.type === 'upstream_performer_changes' || currentState.type === 'upstream_tag_changes' || currentState.type === 'upstream_studio_changes' || currentState.type === 'upstream_scene_changes'
             ? '<button class="ss-accept-all-btn" id="ss-accept-all-btn">Accept All Changes</button>'
             : ''
           }
@@ -974,6 +978,102 @@
         acceptAllBtn.disabled = true;
         acceptAllBtn.textContent = 'Loading...';
 
+        // Upstream scene changes: dedicated per-rec accept loop with full relational resolution
+        if (currentState.type === 'upstream_scene_changes') {
+          try {
+            const allPending = await RecommendationsAPI.getList({
+              type: 'upstream_scene_changes',
+              status: 'pending',
+              limit: 10000,
+              offset: 0,
+            });
+            const recs = allPending.recommendations || [];
+            const total = recs.length;
+            if (total === 0) {
+              acceptAllBtn.textContent = 'No pending scene changes';
+              setTimeout(() => {
+                acceptAllBtn.textContent = 'Accept All Changes';
+                acceptAllBtn.disabled = false;
+              }, 1600);
+              return;
+            }
+
+            const STALL_TIMEOUT_MIN_MS = 120000;
+            let accepted = 0;
+            let cleaned = 0;
+            let failed = 0;
+            let ensuredPerformers = 0;
+            let ensuredTags = 0;
+            let processed = 0;
+            let avgMsPerItem = 0;
+            let stallTimeoutMs = STALL_TIMEOUT_MIN_MS;
+            let currentItemStart = 0;
+            let progressTicker = null;
+            const failureDetails = [];
+
+            const setProgressText = () => {
+              const elapsedSec = Math.max(0, Math.floor((Date.now() - currentItemStart) / 1000));
+              acceptAllBtn.textContent = `Accepting ${processed}/${total} (${elapsedSec}s)...`;
+            };
+
+            for (const rec of recs) {
+              currentItemStart = Date.now();
+              setProgressText();
+              progressTicker = setInterval(setProgressText, 1000);
+
+              try {
+                const response = await Promise.race([
+                  RecommendationsAPI.acceptSceneChange(rec.id),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error(`Timed out after ${Math.ceil(stallTimeoutMs / 1000)}s`)), stallTimeoutMs)),
+                ]);
+                if (response?.action === 'deleted_stale_scene') {
+                  cleaned += 1;
+                } else {
+                  accepted += 1;
+                  ensuredPerformers += (response?.ensured_performers_count || 0);
+                  ensuredTags += (response?.ensured_tags_count || 0);
+                }
+              } catch (e) {
+                failed += 1;
+                const msg = String(e.message || e || 'unknown error');
+                failureDetails.push(`rec ${rec.id}: ${msg}`);
+                console.warn('[Stash Sense] Accept scene change failed:', { rec_id: rec.id, error: msg });
+              } finally {
+                if (progressTicker) { clearInterval(progressTicker); progressTicker = null; }
+                processed += 1;
+                const duration = Date.now() - currentItemStart;
+                avgMsPerItem = avgMsPerItem === 0 ? duration : Math.round((avgMsPerItem * (processed - 1) + duration) / processed);
+                stallTimeoutMs = Math.max(STALL_TIMEOUT_MIN_MS, avgMsPerItem * 8);
+                setProgressText();
+              }
+            }
+
+            if (failed > 0) {
+              const suffix = cleaned > 0 ? `, ${cleaned} stale removed` : '';
+              acceptAllBtn.textContent = `${accepted}/${total} accepted${suffix}, ${failed} failed — see browser console`;
+              acceptAllBtn.classList.add('ss-btn-error');
+              console.warn('[Stash Sense] Accept all scene changes failures:', failureDetails);
+            } else {
+              const parts = [`Accepted ${accepted}/${total}`];
+              if (ensuredPerformers > 0) parts.push(`${ensuredPerformers} performers created`);
+              if (ensuredTags > 0) parts.push(`${ensuredTags} tags created`);
+              if (cleaned > 0) parts.push(`${cleaned} stale removed`);
+              acceptAllBtn.textContent = parts.join(', ');
+              acceptAllBtn.classList.add('ss-btn-success');
+            }
+
+            setTimeout(() => {
+              renderCurrentView(document.getElementById('ss-recommendations'));
+            }, 1500);
+          } catch (e) {
+            acceptAllBtn.textContent = `Error: ${e.message}`;
+            acceptAllBtn.classList.add('ss-btn-error');
+            acceptAllBtn.disabled = false;
+          }
+          return;
+        }
+
+        // Performer / tag / studio changes: smart-default batch with confirmation modal
         try {
           // Fetch ALL pending (high limit to get everything)
           const allPending = await RecommendationsAPI.getList({
