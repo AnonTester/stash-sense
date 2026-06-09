@@ -1,5 +1,8 @@
 ## 2026-06-09
 
+### 0.7.7-beta.1
+- Fix: Upstream scene changes job now works correctly. `UpstreamSceneAnalyzer._process_endpoint()` was missing the `endpoint_name` parameter added in 0.7.6, causing a `TypeError` on every run and producing 0 results.
+
 ### 0.7.6
 - Fix: Progress bar for Scene Stash-Box Tagger and all upstream change
   detection jobs now shows the current stash-box endpoint name (e.g.
