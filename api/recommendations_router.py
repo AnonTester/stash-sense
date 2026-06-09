@@ -573,13 +573,23 @@ def _group_duplicate_scene_recommendations(recs: list[Recommendation]) -> list[R
             updated_at=top_rec.updated_at,
         ))
 
-    grouped_recs.sort(
-        key=lambda rec: (
-            _parse_duplicate_scene_confidence_percent(rec),
-            int(rec.id or 0),
-        ),
-        reverse=True,
-    )
+    first_status = grouped_recs[0].status if grouped_recs else None
+    if first_status in ("dismissed", "resolved"):
+        grouped_recs.sort(
+            key=lambda rec: (
+                rec.resolved_at or rec.updated_at or "",
+                int(rec.id or 0),
+            ),
+            reverse=True,
+        )
+    else:
+        grouped_recs.sort(
+            key=lambda rec: (
+                _parse_duplicate_scene_confidence_percent(rec),
+                int(rec.id or 0),
+            ),
+            reverse=True,
+        )
     return grouped_recs
 
 

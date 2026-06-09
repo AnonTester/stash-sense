@@ -1372,8 +1372,9 @@
           if (aConf !== bConf) return bConf - aConf;
           return Number(b?.id || 0) - Number(a?.id || 0);
         });
-      } else if (currentState.type === 'duplicate_scenes') {
-        // Defensive client-side ordering to keep each status group sorted by confidence.
+      } else if (currentState.type === 'duplicate_scenes' && currentState.status === 'pending') {
+        // Defensive client-side ordering for pending items: high confidence first.
+        // Dismissed/resolved use server-side recency sort — don't override it.
         result.recommendations.sort((a, b) => {
           const aConf = getDuplicateSceneConfidencePercent(a);
           const bConf = getDuplicateSceneConfidencePercent(b);

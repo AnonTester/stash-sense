@@ -1,5 +1,13 @@
 ## 2026-06-09
 
+### 0.7.4
+- Fix: Duplicate scenes resolved/dismissed tab now sorts by recency (newest at
+  top) instead of confidence. Previously the grouping function always sorted by
+  confidence descending, overriding the DB recency order for non-pending items.
+  Python grouper now uses COALESCE(resolved_at, updated_at) DESC sort for
+  dismissed/resolved groups; JS defensive sort for duplicate_scenes is now
+  skipped when status is dismissed or resolved.
+
 ### 0.7.3
 - Fix: Resolved and dismissed recommendations are now sorted by full datetime
   descending (latest at the top). Previously the sort was date-descending but
