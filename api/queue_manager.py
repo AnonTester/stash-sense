@@ -14,10 +14,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _friendly_error_message(exc: Exception, job_row: Optional[dict]) -> str:
+    """Convert a job exception into a short, user-readable error string."""
+    import httpx
+    items = (job_row or {}).get("items_processed") or 0
+    progress = f" ({items:,} items processed)" if items else ""
+    if isinstance(exc, (httpx.ReadTimeout, httpx.ConnectTimeout)):
+        return f"Network timeout after retries{progress}"
+    if isinstance(exc, httpx.ConnectError):
+        return f"Network connection failed{progress}"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code} from remote{progress}"
+    msg = str(exc)
+    short = msg[:200] if msg else type(exc).__name__
+    return f"{short}{progress}"
+
+
 DEFAULT_RESOURCE_SLOTS = {
     ResourceType.GPU: 1,
     ResourceType.CPU_HEAVY: 1,
-    ResourceType.NETWORK: 2,
+    ResourceType.NETWORK: 1,
     ResourceType.LIGHT: 3,
 }
 
@@ -277,11 +294,11 @@ class QueueManager:
                     self._db.update_job_progress(job_id, cursor=final_cursor)
                     logger.warning(f"Job {job_id} ({type_id}) yielded, re-queued at cursor={final_cursor}")
             else:
-                self._db.complete_job(job_id)
+                self._db.complete_job(job_id, result_summary=ctx.result_summary)
                 logger.warning(f"Job {job_id} ({type_id}) completed")
         except Exception as e:
             logger.error("Job %s (%s) failed: %s", job_id, type_id, e, exc_info=True)
-            self._db.fail_job(job_id, str(e))
+            self._db.fail_job(job_id, _friendly_error_message(e, self._db.get_job(job_id)))
 
     def _create_job_instance(self, type_id: str):
         """Create a job instance by type."""

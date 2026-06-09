@@ -9,6 +9,7 @@ StashBoxConnectionManager from Stash's max_requests_per_minute config).
 Falls back to the global shared RateLimiter singleton if none is provided.
 """
 
+import asyncio
 import httpx
 import logging
 from typing import Optional
@@ -16,6 +17,8 @@ from typing import Optional
 from rate_limiter import RateLimiter, Priority
 
 logger = logging.getLogger(__name__)
+
+_RETRY_DELAYS = (2.0, 4.0, 6.0, 8.0, 10.0)
 
 # Fragment with all performer fields used by both query_performers and get_performer
 PERFORMER_FIELDS = """
@@ -154,20 +157,30 @@ class StashBoxClient:
             payload["variables"] = variables
 
         limiter = self._rate_limiter or await RateLimiter.get_instance()
-        async with limiter.acquire(priority):
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    self.endpoint,
-                    json=payload,
-                    headers=self.headers,
+        last_exc: Exception = RuntimeError("No attempts made")
+        for attempt, delay in enumerate([0.0] + list(_RETRY_DELAYS)):
+            if delay > 0:
+                logger.warning(
+                    "StashBox request timed out (attempt %d/%d), retrying in %.0fs...",
+                    attempt, len(_RETRY_DELAYS), delay,
                 )
-                response.raise_for_status()
-
-                result = response.json()
-                if "errors" in result:
-                    raise RuntimeError(f"GraphQL error: {result['errors']}")
-
-                return result["data"]
+                await asyncio.sleep(delay)
+            try:
+                async with limiter.acquire(priority):
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        response = await client.post(
+                            self.endpoint,
+                            json=payload,
+                            headers=self.headers,
+                        )
+                        response.raise_for_status()
+                        result = response.json()
+                        if "errors" in result:
+                            raise RuntimeError(f"GraphQL error: {result['errors']}")
+                        return result["data"]
+            except (httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
+                last_exc = exc
+        raise last_exc
 
     async def query_performers(
         self, page: int = 1, per_page: int = 25

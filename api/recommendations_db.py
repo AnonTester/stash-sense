@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional, Iterator, Any
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 @dataclass
@@ -292,6 +292,7 @@ class RecommendationsDB:
                 items_total INTEGER,
                 items_processed INTEGER DEFAULT 0,
                 error_message TEXT,
+                result_summary TEXT,
                 triggered_by TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 started_at TEXT,
@@ -481,6 +482,13 @@ class RecommendationsDB:
                 ALTER TABLE analysis_watermarks ADD COLUMN logic_version INTEGER DEFAULT 1;
 
                 UPDATE schema_version SET version = 9;
+            """)
+
+        if from_version < 10:
+            conn.executescript("""
+                ALTER TABLE job_queue ADD COLUMN result_summary TEXT;
+
+                UPDATE schema_version SET version = 10;
             """)
 
     @contextmanager
@@ -2007,12 +2015,15 @@ class RecommendationsDB:
                 (job_id,)
             )
 
-    def complete_job(self, job_id: int):
-        """Mark a job as completed."""
+    def complete_job(self, job_id: int, result_summary: Optional[str] = None):
+        """Mark a job as completed, storing an optional human-readable result summary."""
         with self._connection() as conn:
             conn.execute(
-                "UPDATE job_queue SET status = 'completed', completed_at = datetime('now') WHERE id = ?",
-                (job_id,)
+                """UPDATE job_queue
+                   SET status = 'completed', completed_at = datetime('now'),
+                       result_summary = COALESCE(?, result_summary)
+                   WHERE id = ?""",
+                (result_summary, job_id)
             )
 
     def fail_job(self, job_id: int, error_message: str):

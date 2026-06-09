@@ -282,7 +282,13 @@
     }
     card.appendChild(metaRow);
 
-    // Error message
+    // Result summary (completed jobs) or error message (failed jobs)
+    if (job.result_summary && job.status === 'completed') {
+      card.appendChild(SS.createElement('div', {
+        className: 'ss-job-result',
+        textContent: job.result_summary,
+      }));
+    }
     if (job.error_message) {
       card.appendChild(SS.createElement('div', {
         className: 'ss-job-error',

@@ -18,6 +18,7 @@ class JobContext:
         self._queue_manager = queue_manager
         self._stop_requested = False
         self._user_cancelled = False
+        self._result_summary: Optional[str] = None
 
     @property
     def job_id(self) -> int:
@@ -39,6 +40,13 @@ class JobContext:
     def is_user_cancelled(self) -> bool:
         """True if the user explicitly cancelled this job (vs. system shutdown)."""
         return self._user_cancelled
+
+    @property
+    def result_summary(self) -> Optional[str]:
+        return self._result_summary
+
+    def set_result_summary(self, summary: str) -> None:
+        self._result_summary = summary
 
     async def should_yield(self) -> bool:
         """Check whether this job should yield to a higher-priority job.

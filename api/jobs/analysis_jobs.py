@@ -68,6 +68,11 @@ class AnalysisJob(BaseJob):
             if analyzer._items_total is not None and result.items_processed <= analyzer._items_total:
                 final_total = analyzer._items_total
             await context.report_progress(result.items_processed, final_total)
+            summary = (
+                f"{result.items_processed:,} item(s) checked, "
+                f"{result.recommendations_created:,} recommendation(s) added"
+            )
+            context.set_result_summary(summary)
             logger.warning(
                 "Analysis job %s completed (run_id=%d): %d processed, %d recommendations",
                 self._type_id, run_id, result.items_processed, result.recommendations_created,

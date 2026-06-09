@@ -1,5 +1,18 @@
 ## 2026-06-09
 
+### 0.7.5
+- Fix: StashBox API read/connect timeouts no longer immediately fail jobs.
+  Requests are now retried up to 5 times with increasing delays (2s, 4s, 6s,
+  8s, 10s) before the job fails. Affects all StashBox GraphQL calls.
+- Feature: Job history now shows a result summary for completed jobs (e.g.
+  "1,234 item(s) checked, 5 recommendation(s) added"). Failed jobs show a
+  short human-readable reason (e.g. "Network timeout after retries (1,234
+  items processed)") instead of a raw Python exception.
+- Change: Network tasks (all upstream change detection and Scene Stash-Box
+  Tagger) are now serialised — only one runs at a time (was 2 concurrent).
+  This prevents API rate-limit bursts and makes retries more predictable.
+- Internal: DB schema bumped to v10 (adds result_summary column to job_queue).
+
 ### 0.7.4
 - Fix: Duplicate scenes resolved/dismissed tab now sorts by recency (newest at
   top) instead of confidence. Previously the grouping function always sorted by
