@@ -223,6 +223,7 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
         for conn in connections:
             endpoint = conn["endpoint"]
             api_key = conn.get("api_key", "")
+            endpoint_name = conn.get("name", endpoint)
 
             ep_cfg = endpoint_config.get(endpoint, {})
             if not ep_cfg.get("enabled", True):
@@ -232,6 +233,7 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
                 created, processed = await self._process_endpoint(
                     endpoint, api_key, incremental,
                     skip_local_ids=processed_local_ids if priority_order else None,
+                    endpoint_name=endpoint_name,
                 )
                 total_created += created
                 total_processed += processed
@@ -249,6 +251,7 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
     async def _process_endpoint(
         self, endpoint: str, api_key: str, incremental: bool,
         skip_local_ids: set[str] | None = None,
+        endpoint_name: Optional[str] = None,
     ) -> tuple[int, int]:
         """Process a single stash-box endpoint. Returns (created, processed)."""
         local_entities = await self._get_local_entities(endpoint)
@@ -257,11 +260,12 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
             return 0, 0
 
         local_lookup = self._build_local_lookup(local_entities, endpoint)
+        display_name = endpoint_name or endpoint
 
         logger.warning(
             f"Endpoint {endpoint}: {len(local_lookup)} linked {self.entity_type}s to check"
         )
-        self.set_items_total(len(local_lookup))
+        self.set_items_total(len(local_lookup), label=display_name)
 
         # Check if comparison logic version has changed since last run.
         # If so, clear stale snapshots and watermark to force full re-analysis.

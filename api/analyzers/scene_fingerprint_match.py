@@ -168,7 +168,7 @@ class SceneFingerprintMatchAnalyzer(BaseAnalyzer):
 
         # Batch query stash-box
         stashbox = StashBoxClient(endpoint, api_key)
-        self.set_items_total(len(scenes_needing_match))
+        self.set_items_total(len(scenes_needing_match), label=endpoint_name)
         logger.warning(
             "[%s] Starting scan of %d scenes with fingerprints",
             endpoint_name, len(scenes_needing_match),

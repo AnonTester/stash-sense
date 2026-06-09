@@ -880,7 +880,8 @@
     });
     input.checked = !!setting.value;
     input.addEventListener('change', () => {
-      debouncedSave(key, input.checked, toggle.closest('.ss-setting-row'));
+      const onSave = key === 'debug_logging_enabled' ? _refreshLogFilesIfVisible : null;
+      debouncedSave(key, input.checked, toggle.closest('.ss-setting-row'), onSave);
     });
 
     const slider = SS.createElement('span', { className: 'ss-toggle-slider' });
@@ -1611,7 +1612,7 @@
 
   // ==================== Save Logic ====================
 
-  function debouncedSave(key, value, row) {
+  function debouncedSave(key, value, row, onSave = null) {
     if (saveTimeouts[key]) {
       clearTimeout(saveTimeouts[key]);
     }
@@ -1619,11 +1620,17 @@
       try {
         await SettingsAPI.update(key, value);
         showSaveIndicator(row, 'Saved');
+        if (onSave) onSave();
       } catch (e) {
         showSaveIndicator(row, 'Error', true);
         console.error(`Failed to save ${key}:`, e);
       }
     }, 500);
+  }
+
+  function _refreshLogFilesIfVisible() {
+    const logSection = document.getElementById('ss-log-files-section');
+    if (logSection) refreshLogFilesList(logSection);
   }
 
   function showSaveIndicator(row, text, isError = false) {
@@ -1716,6 +1723,24 @@
         renderSettings(settingsPanel);
       }
 
+      // If starting on settings tab, begin periodic log file refresh
+      let logRefreshInterval = null;
+      function startLogRefresh() {
+        if (logRefreshInterval) return;
+        _refreshLogFilesIfVisible();
+        logRefreshInterval = setInterval(_refreshLogFilesIfVisible, 5000);
+      }
+      function stopLogRefresh() {
+        if (logRefreshInterval) {
+          clearInterval(logRefreshInterval);
+          logRefreshInterval = null;
+        }
+      }
+      if (initialTab === 'settings') {
+        // Delay slightly so renderSettings() populates the log section first
+        setTimeout(startLogRefresh, 500);
+      }
+
       // Tab switching
       tabBar.addEventListener('click', (e) => {
         const btn = e.target.closest('.ss-page-tab');
@@ -1740,11 +1765,21 @@
           renderSettings(settingsPanel);
         }
 
+        if (tabName === 'settings') {
+          // Refresh log file list immediately and start 5-second polling
+          setTimeout(startLogRefresh, 200);
+        } else {
+          stopLogRefresh();
+        }
+
         // Refresh recommendation counters when switching back to that tab
         if (tabName === 'recommendations' && window.StashSenseRecommendations) {
           window.StashSenseRecommendations.refreshCounts();
         }
       });
+
+      // Stop polling when navigating away from the plugin page entirely
+      SS.onLeavePlugin(stopLogRefresh);
     }
   }
 

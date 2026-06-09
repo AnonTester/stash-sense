@@ -238,9 +238,10 @@
       progressWrap.appendChild(progressBar);
       const eta = getETA(job);
       const etaText = eta ? ` \u00b7 ${eta} remaining` : '';
+      const labelText = job.progress_label ? ` \u00b7 ${job.progress_label}` : '';
       progressWrap.appendChild(SS.createElement('span', {
         className: 'ss-ops-progress-text',
-        textContent: `${job.items_processed} / ${job.items_total} (${pct}%)${etaText}`,
+        textContent: `${job.items_processed} / ${job.items_total} (${pct}%)${etaText}${labelText}`,
       }));
       card.appendChild(progressWrap);
     } else if (isActive && job.status === 'running') {
@@ -248,9 +249,10 @@
       const progressWrap = SS.createElement('div', { className: 'ss-progress-wrap' });
       const progressBar = SS.createElement('div', { className: 'ss-progress-bar ss-ops-progress-bar ss-progress-indeterminate' });
       progressWrap.appendChild(progressBar);
+      const indeterminateLabelText = job.progress_label ? ` \u00b7 ${job.progress_label}` : '';
       progressWrap.appendChild(SS.createElement('span', {
         className: 'ss-ops-progress-text',
-        textContent: 'Analyzing\u2026',
+        textContent: `Analyzing${indeterminateLabelText}\u2026`,
       }));
       card.appendChild(progressWrap);
     }

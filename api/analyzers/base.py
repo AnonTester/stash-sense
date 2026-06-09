@@ -50,12 +50,15 @@ class BaseAnalyzer(ABC):
         self._items_total: Optional[int] = None
         self._stop_requested = False
         self._job_progress_callback: Optional[Callable[[int, Optional[int]], None]] = None
+        self._job_label_callback: Optional[Callable[[str], None]] = None
 
-    def set_items_total(self, total: int):
-        """Report total items to process for this run."""
+    def set_items_total(self, total: int, label: Optional[str] = None):
+        """Report total items to process for this run, optionally with a display label."""
         self._items_total = total
         if self.run_id is not None:
             self.rec_db.update_analysis_items_total(self.run_id, total)
+        if label is not None and self._job_label_callback:
+            self._job_label_callback(label)
         if self._job_progress_callback:
             self._job_progress_callback(0, total)
 

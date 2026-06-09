@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional, Iterator, Any
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 @dataclass
@@ -293,6 +293,7 @@ class RecommendationsDB:
                 items_processed INTEGER DEFAULT 0,
                 error_message TEXT,
                 result_summary TEXT,
+                progress_label TEXT,
                 triggered_by TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 started_at TEXT,
@@ -489,6 +490,13 @@ class RecommendationsDB:
                 ALTER TABLE job_queue ADD COLUMN result_summary TEXT;
 
                 UPDATE schema_version SET version = 10;
+            """)
+
+        if from_version < 11:
+            conn.executescript("""
+                ALTER TABLE job_queue ADD COLUMN progress_label TEXT;
+
+                UPDATE schema_version SET version = 11;
             """)
 
     @contextmanager
@@ -2048,7 +2056,8 @@ class RecommendationsDB:
             conn.execute("UPDATE job_queue SET status = ? WHERE id = ?", (status, job_id))
 
     def update_job_progress(self, job_id: int, items_processed: Optional[int] = None,
-                            items_total: Optional[int] = None, cursor: Optional[str] = None):
+                            items_total: Optional[int] = None, cursor: Optional[str] = None,
+                            label: Optional[str] = None):
         """Update job progress fields. Only updates non-None fields."""
         updates = []
         params = []
@@ -2061,6 +2070,9 @@ class RecommendationsDB:
         if cursor is not None:
             updates.append("cursor = ?")
             params.append(cursor)
+        if label is not None:
+            updates.append("progress_label = ?")
+            params.append(label)
         if not updates:
             return
         params.append(job_id)

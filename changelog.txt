@@ -1,5 +1,18 @@
 ## 2026-06-09
 
+### 0.7.6
+- Fix: Progress bar for Scene Stash-Box Tagger and all upstream change
+  detection jobs now shows the current stash-box endpoint name (e.g.
+  "StashDB", "FansDB") alongside the item count. The progress counter
+  resets to 0 for each endpoint, which is expected — the label now makes
+  it clear which endpoint is being processed so it no longer looks like
+  a bug. The double-count (0→N twice) is because there are two endpoints.
+- Feature: Settings tab debug log file list now refreshes immediately when
+  switching to the Settings tab, every 5 seconds while the tab is active,
+  and immediately after toggling the Debug Logging option. The interval
+  stops when navigating away from the tab.
+- Internal: DB schema bumped to v11 (adds progress_label column to job_queue).
+
 ### 0.7.5
 - Fix: StashBox API read/connect timeouts no longer immediately fail jobs.
   Requests are now retried up to 5 times with increasing delays (2s, 4s, 6s,

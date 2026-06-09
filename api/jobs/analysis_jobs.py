@@ -50,8 +50,15 @@ class AnalysisJob(BaseJob):
                     exc_info=True,
                 )
 
+        def label_callback(label: str) -> None:
+            try:
+                db.update_job_progress(context.job_id, label=label)
+            except Exception:
+                pass
+
         analyzer = analyzer_class(stash, db, run_id=run_id)
         analyzer._job_progress_callback = progress_callback
+        analyzer._job_label_callback = label_callback
 
         # Wire stop signal from job context to analyzer
         if context.is_stop_requested():
