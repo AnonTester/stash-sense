@@ -571,7 +571,7 @@ class RecommendationsDB:
         # Dismissed/resolved items are reviewed by recency, not confidence.
         # Pending items on confidence-ranked types are sorted by confidence.
         if status in ("dismissed", "resolved"):
-            query += " ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?"
+            query += " ORDER BY COALESCE(resolved_at, updated_at) DESC, id DESC LIMIT ? OFFSET ?"
         elif type == "scene_fingerprint_match":
             query += (
                 " ORDER BY COALESCE(json_extract(details, '$.high_confidence'), 0) DESC, "

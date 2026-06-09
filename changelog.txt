@@ -1,5 +1,13 @@
 ## 2026-06-09
 
+### 0.7.3
+- Fix: Resolved and dismissed recommendations are now sorted by full datetime
+  descending (latest at the top). Previously the sort was date-descending but
+  time-ascending within each date due to SQLite storing timestamps as text.
+  Fixed by using COALESCE(resolved_at, updated_at) DESC so both resolved and
+  dismissed items sort correctly (dismissed items only have updated_at set;
+  resolved items have both resolved_at and updated_at set).
+
 ### 0.7.2
 - Feature: "Accept All Changes" in the Upstream Scene Changes view now
   processes ALL pending scene recommendations, including those with relational
