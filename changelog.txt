@@ -1,3 +1,28 @@
+## 2026-06-10
+
+### 0.8.0
+- Improvement: Debug logging for upstream change-detection jobs (scene,
+  performer, studio, tag) is now far less chatty and far more useful.
+  Low-level httpcore connection-trace records (TCP connect, TLS handshake,
+  send/receive headers and body, connection close - ~15 lines per HTTP
+  request) are no longer written to the debug log; the one-line httpx
+  request/response summary (method, URL, status) is kept.
+- Feature: New per-entity debug log lines for upstream change-detection
+  jobs show which entity was checked (name/title + local id + stash-box
+  id), which fields differed in the comparison, and the outcome
+  (recommendation created #id, refreshed #id, reopened #id, auto-resolved
+  #id, or suppressed because dismissed).
+- Feature: StashBox request retries now log the endpoint, exception type,
+  and message on each retry and on final failure (still at WARNING level).
+  A full traceback for each failed attempt is written to the debug log.
+- Feature: Job result summaries for upstream change-detection jobs now
+  report a "N refreshed" count alongside "N recommendation(s) added" when
+  existing pending recommendations were re-compared and updated in place
+  (their details refreshed) without being counted as new. This clarifies
+  why a manually triggered re-run can show "0 recommendation(s) added"
+  even though pending recommendations still exist - they were not
+  deleted, just re-validated and refreshed.
+
 ## 2026-06-09
 
 ### 0.7.7-beta.1

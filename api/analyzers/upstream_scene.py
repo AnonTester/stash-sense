@@ -165,7 +165,7 @@ class UpstreamSceneAnalyzer(BaseUpstreamAnalyzer):
         self, endpoint: str, api_key: str, incremental: bool,
         skip_local_ids: set[str] | None = None,
         endpoint_name: str | None = None,
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         """Store the current endpoint before processing for stash_id filtering."""
         self._current_endpoint = endpoint
         await self._build_name_lookups()

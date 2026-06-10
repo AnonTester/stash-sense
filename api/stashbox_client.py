@@ -161,7 +161,9 @@ class StashBoxClient:
         for attempt, delay in enumerate([0.0] + list(_RETRY_DELAYS)):
             if delay > 0:
                 logger.warning(
-                    "StashBox request timed out (attempt %d/%d), retrying in %.0fs...",
+                    "StashBox request to %s timed out (%s: %s), retrying "
+                    "(attempt %d/%d) in %.0fs...",
+                    self.endpoint, type(last_exc).__name__, last_exc,
                     attempt, len(_RETRY_DELAYS), delay,
                 )
                 await asyncio.sleep(delay)
@@ -180,6 +182,15 @@ class StashBoxClient:
                         return result["data"]
             except (httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
                 last_exc = exc
+                logger.debug(
+                    "StashBox request to %s failed (attempt %d/%d): %s",
+                    self.endpoint, attempt + 1, len(_RETRY_DELAYS) + 1, exc,
+                    exc_info=True,
+                )
+        logger.warning(
+            "StashBox request to %s failed after %d attempts: %s",
+            self.endpoint, len(_RETRY_DELAYS) + 1, last_exc,
+        )
         raise last_exc
 
     async def query_performers(

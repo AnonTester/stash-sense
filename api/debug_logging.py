@@ -112,6 +112,9 @@ def configure_debug_logging(
     if not enabled:
         # Restore root level so non-file handlers stop receiving debug records
         root.setLevel(logging.WARNING)
+        # Reset the noise-suppression overrides applied below
+        logging.getLogger("httpcore").setLevel(logging.NOTSET)
+        logging.getLogger("httpx").setLevel(logging.NOTSET)
         logger.warning("Debug logging disabled")
         return
 
@@ -141,6 +144,14 @@ def configure_debug_logging(
     # Root level must be DEBUG so that DEBUG records are not discarded
     # before reaching the file handler.
     root.setLevel(logging.DEBUG)
+
+    # httpcore emits ~15 DEBUG records per HTTP request (TCP connect, TLS
+    # handshake, send/receive headers and body, connection close) that add
+    # no diagnostic value beyond httpx's own one-line request/response
+    # summary. Silence them; httpx's "HTTP Request: ..." summary stays at
+    # INFO so the endpoint URL and outcome are still logged.
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.INFO)
 
     _debug_handler = handler
     version_parts = []

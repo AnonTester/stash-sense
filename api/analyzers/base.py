@@ -18,6 +18,7 @@ class AnalysisResult:
     """Result of an analysis run."""
     items_processed: int
     recommendations_created: int
+    recommendations_updated: int = 0
     errors: list[str] = None
 
     def __post_init__(self):

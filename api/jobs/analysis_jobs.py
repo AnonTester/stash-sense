@@ -79,6 +79,8 @@ class AnalysisJob(BaseJob):
                 f"{result.items_processed:,} item(s) checked, "
                 f"{result.recommendations_created:,} recommendation(s) added"
             )
+            if result.recommendations_updated:
+                summary += f", {result.recommendations_updated:,} refreshed"
             context.set_result_summary(summary)
             logger.warning(
                 "Analysis job %s completed (run_id=%d): %d processed, %d recommendations",

@@ -210,6 +210,7 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
 
         total_processed = 0
         total_created = 0
+        total_updated = 0
         errors = []
 
         # Track entities already processed by a higher-priority endpoint
@@ -230,13 +231,14 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
                 continue
 
             try:
-                created, processed = await self._process_endpoint(
+                created, processed, updated = await self._process_endpoint(
                     endpoint, api_key, incremental,
                     skip_local_ids=processed_local_ids if priority_order else None,
                     endpoint_name=endpoint_name,
                 )
                 total_created += created
                 total_processed += processed
+                total_updated += updated
             except Exception as e:
                 error_msg = f"Error processing {endpoint}: {e}"
                 logger.error(error_msg, exc_info=True)
@@ -245,6 +247,7 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
         return AnalysisResult(
             items_processed=total_processed,
             recommendations_created=total_created,
+            recommendations_updated=total_updated,
             errors=errors if errors else None,
         )
 
@@ -252,8 +255,8 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
         self, endpoint: str, api_key: str, incremental: bool,
         skip_local_ids: set[str] | None = None,
         endpoint_name: Optional[str] = None,
-    ) -> tuple[int, int]:
-        """Process a single stash-box endpoint. Returns (created, processed)."""
+    ) -> tuple[int, int, int]:
+        """Process a single stash-box endpoint. Returns (created, processed, refreshed)."""
         local_entities = await self._get_local_entities(endpoint)
 
         if not local_entities:
@@ -296,12 +299,14 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
         sbc = self._create_stashbox_client(endpoint, api_key)
         latest_updated_at = None
         created = 0
+        refreshed = 0
         processed = 0
         compared = 0
         skipped = 0
 
         for i, (stash_box_id, local_entity) in enumerate(local_lookup.items(), start=1):
             local_id = str(local_entity["id"])
+            entity_label = local_entity.get("title") or local_entity.get("name") or ""
             processed = i
 
             try:
@@ -314,8 +319,17 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
                     continue
 
                 if self.rec_db.is_permanently_dismissed(self.type, self.entity_type, local_id):
+                    logger.debug(
+                        f"[{display_name}] '{entity_label}' (id={local_id}) "
+                        f"stash_id={stash_box_id}: permanently dismissed, skipping"
+                    )
                     skipped += 1
                     continue
+
+                logger.debug(
+                    f"[{display_name}] Checking '{entity_label}' (id={local_id}) "
+                    f"stash_id={stash_box_id}"
+                )
 
                 try:
                     up = await self._get_upstream_entity(sbc, stash_box_id)
@@ -323,9 +337,18 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
                     logger.warning(
                         f"Failed to fetch {self.entity_type} {stash_box_id}: {e}"
                     )
+                    logger.debug(
+                        f"[{display_name}] '{entity_label}' (id={local_id}) "
+                        f"stash_id={stash_box_id}: fetch failed",
+                        exc_info=True,
+                    )
                     continue
 
                 if not up:
+                    logger.debug(
+                        f"[{display_name}] '{entity_label}' (id={local_id}) "
+                        f"stash_id={stash_box_id}: not found upstream"
+                    )
                     continue
 
                 updated_at = self._get_upstream_updated_at(up)
@@ -342,12 +365,20 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
                 # so stale recommendations can auto-resolve after local edits.
                 # Still add to skip_local_ids so lower-priority endpoints don't re-process.
                 if watermark and updated_at and updated_at <= watermark and not existing_pending:
+                    logger.debug(
+                        f"[{display_name}] '{entity_label}' (id={local_id}): "
+                        f"not updated since last run ({updated_at} <= {watermark}), skipping"
+                    )
                     skipped += 1
                     if skip_local_ids is not None:
                         skip_local_ids.add(local_id)
                     continue
 
                 if self._is_upstream_deleted(up):
+                    logger.debug(
+                        f"[{display_name}] '{entity_label}' (id={local_id}): "
+                        f"upstream entity deleted/merged, skipping"
+                    )
                     continue
 
                 normalized = self._normalize_upstream(up)
@@ -368,6 +399,10 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
                 compared += 1
 
                 if not changes:
+                    logger.debug(
+                        f"[{display_name}] '{entity_label}' (id={local_id}): "
+                        f"no differences, snapshot updated"
+                    )
                     # No differences: safe to update snapshot baseline
                     self.rec_db.upsert_upstream_snapshot(
                         entity_type=self.entity_type,
@@ -386,9 +421,19 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
                             stale.id, action="auto_resolved",
                             details={"reason": "no_differences"},
                         )
+                        logger.debug(
+                            f"[{display_name}] '{entity_label}' (id={local_id}): "
+                            f"auto-resolved stale recommendation #{stale.id}"
+                        )
                     if skip_local_ids is not None:
                         skip_local_ids.add(local_id)
                     continue
+
+                changed_fields = ", ".join(c["field"] for c in changes)
+                logger.debug(
+                    f"[{display_name}] '{entity_label}' (id={local_id}): "
+                    f"{len(changes)} field(s) differ ({changed_fields})"
+                )
 
                 endpoint_name = get_stashbox_shortname(endpoint)
                 details = self._build_recommendation_details(
@@ -402,6 +447,11 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
 
                 if existing_pending:
                     self.rec_db.update_recommendation_details(existing_pending.id, details)
+                    refreshed += 1
+                    logger.debug(
+                        f"[{display_name}] '{entity_label}' (id={local_id}): "
+                        f"refreshed pending recommendation #{existing_pending.id}"
+                    )
                 else:
                     # Check for dismissed recommendation that can be reopened
                     existing_dismissed = self.rec_db.get_recommendation_by_target(
@@ -412,6 +462,10 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
                         self.rec_db.undismiss(self.type, self.entity_type, local_id)
                         self.rec_db.reopen_recommendation(existing_dismissed.id, details)
                         created += 1
+                        logger.debug(
+                            f"[{display_name}] '{entity_label}' (id={local_id}): "
+                            f"reopened dismissed recommendation #{existing_dismissed.id}"
+                        )
                     else:
                         rec_id = self.create_recommendation(
                             target_type=self.entity_type,
@@ -421,6 +475,15 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
                         )
                         if rec_id:
                             created += 1
+                            logger.debug(
+                                f"[{display_name}] '{entity_label}' (id={local_id}): "
+                                f"created recommendation #{rec_id}"
+                            )
+                        else:
+                            logger.debug(
+                                f"[{display_name}] '{entity_label}' (id={local_id}): "
+                                f"recommendation suppressed (target dismissed)"
+                            )
 
                 if skip_local_ids is not None:
                     skip_local_ids.add(local_id)
@@ -436,7 +499,7 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
 
         logger.warning(
             f"Endpoint {endpoint} complete: {processed} checked, {compared} compared, "
-            f"{created} recs created, {skipped} skipped"
+            f"{created} recs created, {refreshed} recs refreshed, {skipped} skipped"
         )
 
         if latest_updated_at:
@@ -446,4 +509,4 @@ class BaseUpstreamAnalyzer(BaseAnalyzer):
                 logic_version=self.logic_version,
             )
 
-        return created, processed
+        return created, processed, refreshed
