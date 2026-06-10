@@ -22,17 +22,18 @@ Beta versions follow this pattern: `X.Y.Z-beta.N`
 
 ### Step 1: Update Versions
 
-Edit ALL THREE files to the SAME new version:
+Edit ALL FOUR files to the SAME new version:
 - `api/main.py` - update `version="..."` in FastAPI app initialization
 - `api/settings_router.py` - update `_version: str = "..."`
 - `plugin/stash-sense.yml` - update `version:` field
+- `plugin/stash-sense-core.js` - update `const PLUGIN_VERSION = '...'`
 
-**CRITICAL**: All three files must have identical version strings.
+**CRITICAL**: All four files must have identical version strings.
 
 ### Step 2: Commit
 
 ```bash
-git add api/main.py api/settings_router.py plugin/stash-sense.yml
+git add api/main.py api/settings_router.py plugin/stash-sense.yml plugin/stash-sense-core.js
 git commit -m "chore: bump version to X.Y.Z-beta.N"
 ```
 
@@ -62,7 +63,7 @@ GitHub Actions (`.github/workflows/docker-build.yml`) triggers on tag push:
 
 ## Common Mistakes to Avoid
 
-- Forgetting to update one of the three version files
+- Forgetting to update one of the four version files
 - Tag doesn't match version (missing `v` prefix or typo)
 - Pushing tag before pushing commit
 - Creating tag on wrong branch
