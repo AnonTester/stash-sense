@@ -1,3 +1,9 @@
+## 2026-06-30
+
+### 0.8.1
+- Fix: Accept All / Dismiss All buttons in the recommendation list are now disabled when there are no recommendations to act on.
+- Fix: Recommendation list action buttons (Accept All, Dismiss All) now wrap to a new line on mobile instead of overflowing the layout.
+
 ## 2026-06-10
 
 ### 0.8.0

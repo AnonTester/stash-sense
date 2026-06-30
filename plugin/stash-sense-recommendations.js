@@ -1386,6 +1386,7 @@
       const listContent = container.querySelector('.ss-list-content');
 
       if (result.recommendations.length === 0) {
+        container.querySelectorAll('.ss-accept-all-btn, .ss-dismiss-all-btn').forEach(btn => { btn.disabled = true; });
         listContent.innerHTML = `
           <div class="ss-empty-state">
             <p>No ${currentState.status} recommendations found.</p>
