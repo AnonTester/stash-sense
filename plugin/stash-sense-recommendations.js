@@ -231,6 +231,13 @@
       });
     },
 
+    async getUpstreamScenePreview(endpoint, stashboxId) {
+      return apiCall('rec_upstream_scene_preview', {
+        endpoint,
+        stashbox_id: stashboxId,
+      });
+    },
+
     async linkEntity(entityType, entityId, endpoint, stashboxId) {
       return apiCall('rec_link_entity', { entity_type: entityType, entity_id: entityId, endpoint, stashbox_id: stashboxId });
     },
@@ -4048,6 +4055,108 @@
 
   // ==================== Upstream Scene Detail ====================
 
+  /**
+   * Build the "Local Scene" / "Stash-Box Match" preview comparison, matching
+   * the layout used by the Scene Stash-Box Tagger, so users can visually
+   * confirm the match is correct before applying field changes.
+   */
+  function buildUpstreamSceneComparisonEl(opts) {
+    const { sceneId, localTitle, localScene, endpoint, endpointName, stashboxId, upstream } = opts;
+
+    const localScreenshotUrl = relativeUrl(localScene?.paths?.screenshot);
+    const localPreviewUrl = relativeUrl(localScene?.paths?.preview);
+    const localStudio = localScene?.studio || null;
+    const localPerformers = localScene?.performers || [];
+    const localDate = localScene?.date || '';
+    const localFiles = localScene?.files || [];
+    const localFilenames = localFiles
+      .map(f => String(f?.path || '').split(/[\\/]/).pop())
+      .filter(Boolean);
+    const localDuration = localFiles[0]?.duration;
+
+    const stashboxBaseHref = String(endpoint || '').replace(/\/graphql$/, '');
+    const stashboxSceneHref = `${stashboxBaseHref}/scenes/${stashboxId}`;
+    const upstreamStudio = upstream?.studio || null;
+    const upstreamPerformers = upstream?.performers || [];
+    const upstreamDate = upstream?.date || '';
+    const upstreamTitle = upstream?.title || '';
+    const upstreamCoverUrl = upstream?.cover_url || null;
+    const upstreamDuration = upstream?.duration;
+
+    const el = document.createElement('div');
+    el.className = 'ss-fp-detail-comparison ss-scene-tagger-preview';
+    el.innerHTML = `
+      <div class="ss-fp-detail-side">
+        <h4>Local Scene</h4>
+        <div class="ss-dup-scene-thumb ss-us-local-thumb">
+          ${localScreenshotUrl
+            ? `<img src="${escapeHtml(localScreenshotUrl)}" alt="Local scene screenshot" loading="lazy" onerror="this.style.display='none'" />`
+            : '<div class="ss-no-image">No Screenshot</div>'
+          }
+          ${localPreviewUrl
+            ? `<video class="ss-dup-scene-preview ss-us-scene-preview" muted loop preload="none" data-src="${escapeHtml(localPreviewUrl)}"></video>`
+            : ''
+          }
+        </div>
+        <div class="ss-fp-scene-title">
+          <a href="/scenes/${encodeURIComponent(String(sceneId))}" target="_blank" rel="noopener">${escapeHtml(localTitle || 'Unknown')}</a>
+        </div>
+        ${localFilenames.length ? `<div class="ss-fp-field"><strong>File:</strong> ${localFilenames.map(f => escapeHtml(f)).join(', ')}</div>` : ''}
+        ${localStudio ? `<div class="ss-fp-field"><strong>Studio:</strong> ${escapeHtml(localStudio.name)}</div>` : ''}
+        ${localPerformers.length ? `<div class="ss-fp-field"><strong>Performers:</strong> ${localPerformers.map(p => escapeHtml(p.name)).join(', ')}</div>` : ''}
+        ${localDate ? `<div class="ss-fp-field"><strong>Date:</strong> ${escapeHtml(localDate)}</div>` : ''}
+        ${localDuration ? `<div class="ss-fp-field"><strong>Duration:</strong> ${formatDuration(localDuration)}</div>` : ''}
+      </div>
+      <div class="ss-fp-detail-divider"></div>
+      <div class="ss-fp-detail-side">
+        <h4>Stash-Box Match</h4>
+        <div class="ss-dup-scene-thumb ss-us-cover-thumb">
+          ${upstreamCoverUrl
+            ? `<img src="${escapeHtml(upstreamCoverUrl)}" alt="Stash-Box scene cover" loading="lazy" onerror="this.style.display='none'" />`
+            : '<div class="ss-no-image">No Cover</div>'
+          }
+        </div>
+        <div class="ss-fp-scene-title">
+          <a href="${escapeHtml(stashboxSceneHref)}" target="_blank" rel="noopener">${escapeHtml(upstreamTitle || 'Unknown')}</a>
+        </div>
+        ${upstreamStudio ? `<div class="ss-fp-field"><strong>Studio:</strong> ${escapeHtml(upstreamStudio.name)}</div>` : ''}
+        ${upstreamPerformers.length ? `<div class="ss-fp-field"><strong>Performers:</strong> ${upstreamPerformers.map(p => escapeHtml(p.name || '')).join(', ')}</div>` : ''}
+        ${upstreamDate ? `<div class="ss-fp-field"><strong>Date:</strong> ${escapeHtml(upstreamDate)}</div>` : ''}
+        ${upstreamDuration ? `<div class="ss-fp-field"><strong>Duration:</strong> ${formatDuration(upstreamDuration)}</div>` : ''}
+        <div class="ss-fp-field">
+          <strong>Endpoint:</strong>
+          <a class="ss-detail-entity-link" href="${escapeHtml(stashboxSceneHref)}" target="_blank" rel="noopener">${escapeHtml(endpointName || endpoint)}</a>
+        </div>
+      </div>
+    `;
+
+    // Local preview video on hover (same behavior as duplicate scenes / tagger).
+    const localThumb = el.querySelector('.ss-us-local-thumb');
+    if (localThumb) {
+      const video = localThumb.querySelector('.ss-us-scene-preview');
+      const img = localThumb.querySelector('img');
+      if (video) {
+        localThumb.addEventListener('mouseenter', () => {
+          if (!video.src && video.dataset.src) {
+            video.src = video.dataset.src;
+          }
+          if (img) img.style.opacity = '0';
+          video.style.opacity = '1';
+          video.play().catch(() => {});
+        });
+
+        localThumb.addEventListener('mouseleave', () => {
+          video.pause();
+          if (img) img.style.opacity = '1';
+          video.style.opacity = '0';
+          setTimeout(() => { video.currentTime = 0; }, 200);
+        });
+      }
+    }
+
+    return el;
+  }
+
   async function renderUpstreamSceneDetail(container, rec) {
     const details = rec.details;
     const simpleChanges = filterRealChanges(details.changes || []);
@@ -4114,6 +4223,27 @@
       </div>
     `;
     wrapper.appendChild(headerDiv);
+
+    // Local scene / Stash-box match preview (tagger-style comparison), so
+    // users can visually confirm this is actually the right scene even when
+    // there's little else to go on besides a stashdb ID.
+    let localScenePreview = null;
+    let upstreamScenePreview = null;
+    const previewResults = await Promise.allSettled([
+      RecommendationsAPI.getSceneDetail(sceneId),
+      RecommendationsAPI.getUpstreamScenePreview(endpoint, details.stash_box_id),
+    ]);
+    if (previewResults[0].status === 'fulfilled') localScenePreview = previewResults[0].value;
+    if (previewResults[1].status === 'fulfilled') upstreamScenePreview = previewResults[1].value;
+    wrapper.appendChild(buildUpstreamSceneComparisonEl({
+      sceneId,
+      localTitle: details.scene_name,
+      localScene: localScenePreview,
+      endpoint,
+      endpointName: details.endpoint_name,
+      stashboxId: details.stash_box_id,
+      upstream: upstreamScenePreview,
+    }));
 
     // Local context summary
     const localPerformers = details.current_performers || [];

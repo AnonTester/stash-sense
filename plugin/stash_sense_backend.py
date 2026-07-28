@@ -793,6 +793,16 @@ def handle_recommendations(mode, args, sidecar_url):
             "stashbox_id": args.get("stashbox_id", ""),
         })
 
+    elif mode == "rec_upstream_scene_preview":
+        endpoint = args.get("endpoint", "")
+        stashbox_id = args.get("stashbox_id", "")
+        if not endpoint or not stashbox_id:
+            return {"error": "endpoint and stashbox_id required"}
+        return sidecar_post(sidecar_url, "/recommendations/actions/upstream-scene-preview", {
+            "endpoint": endpoint,
+            "stashbox_id": stashbox_id,
+        })
+
     elif mode == "rec_link_entity":
         entity_type = args.get("entity_type", "")
         entity_id = args.get("entity_id", "")

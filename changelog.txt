@@ -1,3 +1,12 @@
+## 2026-07-28
+
+### 0.9.0
+- Feature: Upstream Scene Changes now shows "Local Scene" / "Stash-Box Match"
+  preview boxes (cover image, filename, studio, performers, date, duration),
+  matching the Scene Stash-Box Tagger, so it's possible to visually confirm
+  a match is correct even when the scene has little local metadata besides
+  a stashdb ID.
+
 ## 2026-06-30
 
 ### 0.8.1

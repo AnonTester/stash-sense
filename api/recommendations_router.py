@@ -2212,6 +2212,12 @@ class FindLinkedEntityRequest(BaseModel):
     stashbox_id: str
 
 
+class UpstreamScenePreviewRequest(BaseModel):
+    """Request for a live stash-box scene preview (tagger-style comparison)."""
+    endpoint: str
+    stashbox_id: str
+
+
 class LinkEntityRequest(BaseModel):
     """Request to link a local entity to a stash-box ID."""
     entity_type: str  # "performer", "tag", "studio"
@@ -2741,6 +2747,36 @@ async def find_linked_entity_action(request: FindLinkedEntityRequest):
         stashbox_id=request.stashbox_id,
     )
     return {"result": result}
+
+
+@router.post("/actions/upstream-scene-preview")
+async def upstream_scene_preview_action(request: UpstreamScenePreviewRequest):
+    """Fetch a live stash-box scene preview (cover, studio, performers, duration)
+    for tagger-style side-by-side comparison against the local scene."""
+    sbc = _get_stashbox_client(request.endpoint)
+    scene = await sbc.get_scene(request.stashbox_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found upstream")
+
+    images = scene.get("images") or []
+    studio = scene.get("studio")
+    performers = [
+        {
+            "id": (pa.get("performer") or {}).get("id"),
+            "name": (pa.get("performer") or {}).get("name"),
+            "as": pa.get("as"),
+        }
+        for pa in (scene.get("performers") or [])
+    ]
+
+    return {
+        "title": scene.get("title"),
+        "date": scene.get("release_date") or scene.get("date"),
+        "studio": {"id": studio.get("id"), "name": studio.get("name")} if studio else None,
+        "performers": performers,
+        "duration": scene.get("duration"),
+        "cover_url": images[0]["url"] if images else None,
+    }
 
 
 @router.post("/actions/link-entity")

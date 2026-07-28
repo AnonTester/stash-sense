@@ -88,12 +88,14 @@ SCENE_FIELDS = """
     title
     details
     release_date
+    duration
     urls { url site { name } }
     studio { id name }
     tags { id name }
     performers { performer { id name aliases gender } as }
     director
     code
+    images { url }
     deleted
     created
     updated
