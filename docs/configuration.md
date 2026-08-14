@@ -12,6 +12,7 @@ Set these when starting the Docker container:
 |----------|----------|-------------|
 | `STASH_URL` | Yes | URL to your Stash instance (e.g., `http://10.0.0.4:9999`) |
 | `STASH_API_KEY` | Yes | Stash API key from **Settings > Security > API Key** |
+| `DATABASE_UPDATE_REPO` | No | GitHub `owner/repo` to check for database releases (default: `carrotwaxr/stash-sense-data`) — override to point at a different data repo |
 
 ```bash
 -e STASH_URL=http://your-stash-host:9999 \

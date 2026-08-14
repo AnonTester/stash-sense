@@ -26,6 +26,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import shutil
 import time
 import uuid
@@ -42,7 +43,10 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-GITHUB_REPO = "carrotwaxr/stash-sense-data"
+# Overridable so forks can point at their own data repo (e.g. a fork whose
+# own dataset-update pipeline has picked up where a stale/abandoned upstream
+# data repo left off) without patching this file again on every pull.
+GITHUB_REPO = os.environ.get("DATABASE_UPDATE_REPO", "carrotwaxr/stash-sense-data")
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 CACHE_TTL_SECONDS = 600          # 10 minutes — in-memory short-term cache
 PERSISTENT_CACHE_TTL = 43_200   # 12 hours — survives Docker restarts
