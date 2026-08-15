@@ -939,22 +939,22 @@
         ${currentState.status === 'pending' ? `
         <div class="ss-list-actions">
           ${currentState.type === 'upstream_performer_changes' || currentState.type === 'upstream_tag_changes' || currentState.type === 'upstream_studio_changes' || currentState.type === 'upstream_scene_changes'
-            ? '<button class="ss-accept-all-btn" id="ss-accept-all-btn">Accept All Changes</button>'
+            ? '<button class="ss-accept-all-btn" id="ss-accept-all-btn" style="display:none;">Accept All Changes</button>'
             : ''
           }
           ${currentState.type === 'scene_fingerprint_match'
-            ? '<button class="ss-accept-all-btn" id="ss-accept-all-fp-btn">Accept All High-Confidence</button>'
+            ? '<button class="ss-accept-all-btn" id="ss-accept-all-fp-btn" style="display:none;">Accept All High-Confidence</button>'
             : ''
           }
           ${currentState.type === 'upstream_scene_changes'
-            ? '<button class="ss-accept-all-btn" id="ss-accept-all-tag-url-code-btn">Accept All Tag/URL/Code Only Changes</button>'
+            ? '<button class="ss-accept-all-btn" id="ss-accept-all-tag-url-code-btn" style="display:none;">Accept All Tag/URL/Code Only Changes</button>'
             : ''
           }
           ${currentState.type === 'upstream_performer_changes'
-            ? '<button class="ss-accept-all-btn" id="ss-accept-all-performer-url-btn">Accept All URL Only Changes</button>'
+            ? '<button class="ss-accept-all-btn" id="ss-accept-all-performer-url-btn" style="display:none;">Accept All URL Only Changes</button>'
             : ''
           }
-          <button class="ss-dismiss-all-btn" id="ss-dismiss-all-btn">Dismiss All</button>
+          <button class="ss-dismiss-all-btn" id="ss-dismiss-all-btn" style="display:none;">Dismiss All</button>
         </div>
         ` : ''}
       </div>
@@ -1408,6 +1408,12 @@
         `;
         return;
       }
+
+      // There's something to act on -- reveal the Accept All / Dismiss All
+      // buttons now (they start hidden in the template to avoid a
+      // flash-then-hide on page load, before we know whether anything's
+      // actually pending).
+      container.querySelectorAll('.ss-accept-all-btn, .ss-dismiss-all-btn').forEach(btn => { btn.style.display = ''; });
 
       listContent.innerHTML = '';
 

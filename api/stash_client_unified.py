@@ -457,7 +457,14 @@ class StashClientUnified:
           }
         }
         """
-        filter_input = {"per_page": limit, "page": (offset // limit) + 1}
+        # Explicit stable sort is required here: these results are walked
+        # page-by-page across multiple separate requests (sometimes minutes
+        # or hours apart, e.g. resuming a fingerprint job after a restart).
+        # Without a deterministic order, Stash's default ordering can shift
+        # between requests (ties broken differently, scenes updated mid-walk),
+        # causing the same scene to appear on more than one page -- which
+        # silently inflates a caller's processed-count past its own total.
+        filter_input = {"per_page": limit, "page": (offset // limit) + 1, "sort": "id", "direction": "ASC"}
         scene_filter = {}
 
         if updated_after:
@@ -928,7 +935,14 @@ class StashClientUnified:
           }
         }
         """
-        filter_input = {"per_page": limit, "page": (offset // limit) + 1}
+        # Explicit stable sort is required here: these results are walked
+        # page-by-page across multiple separate requests (sometimes minutes
+        # or hours apart, e.g. resuming a fingerprint job after a restart).
+        # Without a deterministic order, Stash's default ordering can shift
+        # between requests (ties broken differently, scenes updated mid-walk),
+        # causing the same scene to appear on more than one page -- which
+        # silently inflates a caller's processed-count past its own total.
+        filter_input = {"per_page": limit, "page": (offset // limit) + 1, "sort": "id", "direction": "ASC"}
         scene_filter = {}
 
         if updated_after:
@@ -936,6 +950,24 @@ class StashClientUnified:
 
         data = await self._execute(query, {"filter": filter_input, "scene_filter": scene_filter})
         return data["findScenes"]["scenes"], data["findScenes"]["count"]
+
+    async def get_all_scene_ids(self) -> set[int]:
+        """Get the set of every scene ID currently in Stash.
+
+        IDs only, in a single request -- cheap enough to call on every
+        fingerprint-status check, used to detect scene_fingerprints rows
+        that have gone orphaned (their scene was deleted from Stash) rather
+        than trusting a raw count that orphans would inflate.
+        """
+        query = """
+        query AllSceneIds($filter: FindFilterType) {
+          findScenes(filter: $filter) {
+            scenes { id }
+          }
+        }
+        """
+        data = await self._execute(query, {"filter": {"per_page": -1}})
+        return {int(s["id"]) for s in data["findScenes"]["scenes"]}
 
     async def get_scenes_with_fingerprints(
         self,
@@ -974,7 +1006,14 @@ class StashClientUnified:
           }
         }
         """
-        filter_input = {"per_page": limit, "page": (offset // limit) + 1}
+        # Explicit stable sort is required here: these results are walked
+        # page-by-page across multiple separate requests (sometimes minutes
+        # or hours apart, e.g. resuming a fingerprint job after a restart).
+        # Without a deterministic order, Stash's default ordering can shift
+        # between requests (ties broken differently, scenes updated mid-walk),
+        # causing the same scene to appear on more than one page -- which
+        # silently inflates a caller's processed-count past its own total.
+        filter_input = {"per_page": limit, "page": (offset // limit) + 1, "sort": "id", "direction": "ASC"}
         scene_filter = {}
 
         if updated_after:

@@ -437,13 +437,23 @@
         <p class="ss-settings-cat-desc">Face recognition database used for performer identification and duplicate detection.</p>
       </div>
       <div class="ss-settings-cat-body">
-        <div class="ss-id-database-stats ss-id-database-loading">
-          <div class="ss-spinner" style="width:16px;height:16px;margin:0 auto;"></div>
+        <div class="ss-id-db-group">
+          <h3 class="ss-id-db-group-title">Performer Database</h3>
+          <div class="ss-id-database-stats ss-id-database-stats-performer ss-id-database-loading">
+            <div class="ss-spinner" style="width:16px;height:16px;margin:0 auto;"></div>
+          </div>
+        </div>
+        <div class="ss-id-db-group">
+          <h3 class="ss-id-db-group-title">Fingerprint Database</h3>
+          <div class="ss-id-database-stats ss-id-database-stats-fingerprint ss-id-database-loading">
+            <div class="ss-spinner" style="width:16px;height:16px;margin:0 auto;"></div>
+          </div>
         </div>
       </div>
     `;
 
-    const statsEl = section.querySelector('.ss-id-database-stats');
+    const performerStatsEl = section.querySelector('.ss-id-database-stats-performer');
+    const fingerprintStatsEl = section.querySelector('.ss-id-database-stats-fingerprint');
 
     try {
       const [fpStatus, dbInfo, updateInfo] = await Promise.all([
@@ -453,14 +463,15 @@
       ]);
 
       const fpCoverage = (fpStatus && fpStatus.complete_fingerprints) || 0;
-      const fpNeedsRefresh = (fpStatus && fpStatus.needs_refresh_count) || 0;
+      const totalScenes = fpStatus && fpStatus.total_scenes != null ? fpStatus.total_scenes : null;
       const dbVersion = (fpStatus && fpStatus.current_db_version) || dbInfo?.version || 'N/A';
       const performerCount = dbInfo?.performer_count || 0;
       const faceCount = dbInfo?.face_count || 0;
       const tattooCount = dbInfo?.tattoo_embedding_count || 0;
 
-      statsEl.className = 'ss-id-database-stats';
-      statsEl.innerHTML = `
+      // Row 1: performer database (the ~2GB dataset downloaded via Database Update)
+      performerStatsEl.className = 'ss-id-database-stats ss-id-database-stats-performer';
+      performerStatsEl.innerHTML = `
         <div class="ss-db-stat">
           <span class="ss-db-stat-value">${dbVersion}</span>
           <span class="ss-db-stat-label">Version</span>
@@ -490,19 +501,36 @@
           <span class="ss-db-stat-label">Tattoos</span>
         </div>
         ` : ''}
+      `;
+
+      // Row 2: this scene library's own fingerprint coverage (stash_sense.db,
+      // local to this install -- not part of the downloaded performer
+      // database). "Missing" replaces the old "Need Refresh" figure: with
+      // cached signals, a performer-database update no longer invalidates
+      // existing fingerprints, so the only gap worth surfacing here is
+      // scenes that have never been fingerprinted at all.
+      const missing = totalScenes != null ? Math.max(0, totalScenes - fpCoverage) : null;
+      fingerprintStatsEl.className = 'ss-id-database-stats ss-id-database-stats-fingerprint';
+      fingerprintStatsEl.innerHTML = `
+        <div class="ss-db-stat">
+          <span class="ss-db-stat-value">${totalScenes != null ? totalScenes.toLocaleString() : 'N/A'}</span>
+          <span class="ss-db-stat-label">Scenes</span>
+        </div>
         <div class="ss-db-stat">
           <span class="ss-db-stat-value">${fpCoverage.toLocaleString()}</span>
           <span class="ss-db-stat-label">Fingerprints</span>
         </div>
-        ${fpNeedsRefresh > 0 ? `
+        ${missing > 0 ? `
         <div class="ss-db-stat ss-db-stat-warning">
-          <span class="ss-db-stat-value">${fpNeedsRefresh.toLocaleString()}</span>
-          <span class="ss-db-stat-label">Need Refresh</span>
+          <span class="ss-db-stat-value">${missing.toLocaleString()}</span>
+          <span class="ss-db-stat-label">Missing</span>
         </div>
         ` : ''}
       `;
     } catch (e) {
-      statsEl.innerHTML = `<span style="color:#888;font-size:13px;">Failed to load: ${e.message}</span>`;
+      const errHtml = `<span style="color:#888;font-size:13px;">Failed to load: ${e.message}</span>`;
+      performerStatsEl.innerHTML = errHtml;
+      fingerprintStatsEl.innerHTML = errHtml;
     }
 
     return section;
@@ -837,6 +865,15 @@
     info.innerHTML = `
       <label class="ss-setting-label">${setting.label}</label>
       <span class="ss-setting-desc">${setting.description}</span>
+      ${key === 'detection_size' ? `
+        <span class="ss-setting-warning">
+          ⚠️ Changing this invalidates the cached face/body/tattoo
+          signals used by Stash Sense's fingerprint fast-path. Every scene
+          will need to be fully re-fingerprinted (frame extraction +
+          detection + embedding, not just re-matched) to use the new
+          resolution.
+        </span>
+      ` : ''}
     `;
 
     const control = SS.createElement('div', { className: 'ss-setting-control' });

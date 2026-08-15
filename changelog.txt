@@ -1,5 +1,35 @@
 ## 2026-08-15
 
+### 0.12.2
+- Fix: Fingerprint generation (and two other paginated scene queries) had
+  no explicit sort on their Stash GraphQL findScenes call, so pagination
+  order could shift between requests -- most visibly when a job resumed
+  after a sidecar restart. This let the same scene be counted on more than
+  one page, inflating processed-count past total (e.g. "5999 / 5947,
+  101%, -6s remaining"). All three now sort by id explicitly.
+- Improvement: "Accept All"/"Dismiss All" buttons on the recommendations
+  list no longer flash visible then disappear on page load -- they start
+  hidden and only appear once it's known there's something pending.
+- Improvement: Identification Database stats (Settings tab) are now split
+  into two rows: the downloaded performer database (Version, Performers,
+  Faces, Tattoos) and this install's own fingerprint coverage (Scenes,
+  Fingerprints, Missing). Retired "Need Refresh" -- with cached signals
+  (0.12.0), a performer-database update no longer invalidates existing
+  fingerprints, so it's no longer a meaningful warning.
+- Improvement: The Detection Resolution setting now warns that changing
+  it invalidates cached face/body/tattoo signals and requires a full
+  re-fingerprint of every scene -- unlike the other detection-affecting
+  settings (frame count, minimum face size), it isn't tracked by the
+  0.12.0 signal cache's compatibility check.
+- Fix: scene_fingerprints rows for scenes deleted from Stash were never
+  cleaned up, so complete_fingerprints could exceed the live scene count
+  (one install had 6723 fingerprint rows against 5947 real scenes, 858 of
+  them orphaned) -- inflating "needs refresh" and making a naive
+  total-minus-complete "missing" count go negative. /fingerprints/status
+  now cross-references Stash's actual scene ID list on every check,
+  prunes orphaned fingerprint/signal-cache rows, and reports an accurate
+  missing count.
+
 ### 0.12.1
 - Fix: Operations and Settings tab panels double-padded their horizontal
   margin (they nest inside the Recommendations dashboard container, which

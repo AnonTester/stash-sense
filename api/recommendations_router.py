@@ -1471,6 +1471,7 @@ class FingerprintStatusResponse(BaseModel):
     needs_refresh_count: Optional[int] = None
     generation_running: bool = False
     generation_progress: Optional[dict] = None
+    total_scenes: Optional[int] = None
 
 
 class FingerprintGenerateRequest(BaseModel):
@@ -1494,9 +1495,35 @@ async def get_fingerprint_status():
     generation_running = generator is not None and generator.status.value == "running"
     progress = generator.progress.to_dict() if generator else None
 
+    # Total scene count from Stash itself, so the UI can show "missing"
+    # without conflating it with the performer database's own counts. This
+    # also self-heals scene_fingerprints (and the signal-cache tables)
+    # against scenes deleted from Stash: their fingerprint rows never get
+    # cleaned up on their own, so a naive "total - complete" subtraction
+    # can go negative once enough scenes are deleted (complete_fingerprints
+    # includes orphans, so it can end up larger than the live scene count).
+    total_scenes = None
+    complete_fingerprints = stats.get("complete_fingerprints", 0)
+    try:
+        stash = get_stash_client()
+        stash_scene_ids = await stash.get_all_scene_ids()
+        total_scenes = len(stash_scene_ids)
+
+        fingerprinted_ids = db.get_fingerprinted_scene_ids()
+        orphaned_ids = fingerprinted_ids - stash_scene_ids
+        if orphaned_ids:
+            db.delete_fingerprints_for_scenes(list(orphaned_ids))
+            complete_fingerprints = len(fingerprinted_ids) - len(orphaned_ids)
+            logger.warning(
+                "Pruned %d orphaned scene fingerprint(s) for scenes no longer in Stash",
+                len(orphaned_ids),
+            )
+    except Exception:
+        logger.exception("Failed to reconcile fingerprint coverage against Stash scene list")
+
     return FingerprintStatusResponse(
         total_fingerprints=stats.get("total_fingerprints", 0),
-        complete_fingerprints=stats.get("complete_fingerprints", 0),
+        complete_fingerprints=complete_fingerprints,
         pending_fingerprints=stats.get("pending_fingerprints", 0),
         error_fingerprints=stats.get("error_fingerprints", 0),
         current_db_version=_current_db_version,
@@ -1504,6 +1531,7 @@ async def get_fingerprint_status():
         needs_refresh_count=stats.get("needs_refresh_count"),
         generation_running=generation_running,
         generation_progress=progress,
+        total_scenes=total_scenes,
     )
 
 

@@ -1735,6 +1735,23 @@
   font-size: 0.85rem;
 }
 
+.ss-id-db-group {
+  margin-bottom: 16px;
+}
+
+.ss-id-db-group:last-child {
+  margin-bottom: 0;
+}
+
+.ss-id-db-group-title {
+  margin: 0 0 8px 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--bs-secondary-color, #888);
+}
+
 .ss-id-database-stats {
   display: flex;
   gap: 12px;
@@ -2808,6 +2825,13 @@ a.ss-upstream-endpoint-badge:hover {
   display: block;
   font-size: 12px;
   color: var(--bs-secondary-color, #888);
+}
+
+.ss-setting-warning {
+  display: block;
+  font-size: 12px;
+  color: #f0ad4e;
+  margin-top: 4px;
 }
 
 .ss-setting-control {

@@ -1577,6 +1577,51 @@ class RecommendationsDB:
             )
             return cursor.rowcount
 
+    def get_fingerprinted_scene_ids(self) -> set[int]:
+        """Scene IDs with a complete fingerprint.
+
+        Used against Stash's own current scene ID list to find orphans --
+        rows left behind for scenes since deleted from Stash -- which
+        inflate this count if never cleaned up.
+        """
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT stash_scene_id FROM scene_fingerprints WHERE fingerprint_status = 'complete'"
+            ).fetchall()
+            return {row[0] for row in rows}
+
+    def delete_fingerprints_for_scenes(self, scene_ids: list[int]) -> int:
+        """Delete all fingerprint and signal-cache data for scenes that no
+        longer exist in Stash. Returns the number of scene_fingerprints
+        rows deleted.
+        """
+        if not scene_ids:
+            return 0
+        deleted = 0
+        with self._connection() as conn:
+            # Chunk to stay under SQLite's default ~999-variable-per-statement limit.
+            for i in range(0, len(scene_ids), 500):
+                chunk = scene_ids[i:i + 500]
+                placeholders = ",".join("?" * len(chunk))
+                fp_ids = [
+                    row[0] for row in conn.execute(
+                        f"SELECT id FROM scene_fingerprints WHERE stash_scene_id IN ({placeholders})", chunk
+                    ).fetchall()
+                ]
+                if fp_ids:
+                    fp_placeholders = ",".join("?" * len(fp_ids))
+                    conn.execute(
+                        f"DELETE FROM scene_fingerprint_faces WHERE fingerprint_id IN ({fp_placeholders})", fp_ids
+                    )
+                cursor = conn.execute(
+                    f"DELETE FROM scene_fingerprints WHERE stash_scene_id IN ({placeholders})", chunk
+                )
+                deleted += cursor.rowcount
+                conn.execute(f"DELETE FROM scene_signal_cache WHERE stash_scene_id IN ({placeholders})", chunk)
+                conn.execute(f"DELETE FROM scene_face_embeddings WHERE stash_scene_id IN ({placeholders})", chunk)
+                conn.execute(f"DELETE FROM scene_tattoo_embeddings WHERE stash_scene_id IN ({placeholders})", chunk)
+        return deleted
+
     # ==================== Scene signal cache (face/body/tattoo) ====================
     #
     # Caches the DB-independent, expensive part of scene analysis (frame
