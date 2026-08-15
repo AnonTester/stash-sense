@@ -4099,9 +4099,9 @@
           }
         </div>
         <div class="ss-fp-scene-title">
-          <a href="/scenes/${encodeURIComponent(String(sceneId))}" target="_blank" rel="noopener">${escapeHtml(localTitle || 'Unknown')}</a>
+          <a href="/scenes/${encodeURIComponent(String(sceneId))}" target="_blank" rel="noopener">${escapeHtmlBreakable(localTitle || 'Unknown')}</a>
         </div>
-        ${localFilenames.length ? `<div class="ss-fp-field"><strong>File:</strong> ${localFilenames.map(f => escapeHtml(f)).join(', ')}</div>` : ''}
+        ${localFilenames.length ? `<div class="ss-fp-field"><strong>File:</strong> ${localFilenames.map(f => escapeHtmlBreakable(f)).join(', ')}</div>` : ''}
         ${localStudio ? `<div class="ss-fp-field"><strong>Studio:</strong> ${escapeHtml(localStudio.name)}</div>` : ''}
         ${localPerformers.length ? `<div class="ss-fp-field"><strong>Performers:</strong> ${localPerformers.map(p => escapeHtml(p.name)).join(', ')}</div>` : ''}
         ${localDate ? `<div class="ss-fp-field"><strong>Date:</strong> ${escapeHtml(localDate)}</div>` : ''}
@@ -4117,7 +4117,7 @@
           }
         </div>
         <div class="ss-fp-scene-title">
-          <a href="${escapeHtml(stashboxSceneHref)}" target="_blank" rel="noopener">${escapeHtml(upstreamTitle || 'Unknown')}</a>
+          <a href="${escapeHtml(stashboxSceneHref)}" target="_blank" rel="noopener">${escapeHtmlBreakable(upstreamTitle || 'Unknown')}</a>
         </div>
         ${upstreamStudio ? `<div class="ss-fp-field"><strong>Studio:</strong> ${escapeHtml(upstreamStudio.name)}</div>` : ''}
         ${upstreamPerformers.length ? `<div class="ss-fp-field"><strong>Performers:</strong> ${upstreamPerformers.map(p => escapeHtml(p.name || '')).join(', ')}</div>` : ''}
@@ -5318,7 +5318,7 @@
               }
             </div>
             <div class="ss-fp-scene-title">
-              <a href="${escapeHtml(localSceneHref)}" target="_blank" rel="noopener">${escapeHtml(d.local_scene_title || 'Unknown')}</a>
+              <a href="${escapeHtml(localSceneHref)}" target="_blank" rel="noopener">${escapeHtmlBreakable(d.local_scene_title || 'Unknown')}</a>
             </div>
             ${localStudioLink ? `<div class="ss-fp-field"><strong>Studio:</strong> ${localStudioLink}</div>` : ''}
             ${localPerformerLinks ? `<div class="ss-fp-field"><strong>Performers:</strong> ${localPerformerLinks}</div>` : ''}
@@ -5336,7 +5336,7 @@
               }
             </div>
             <div class="ss-fp-scene-title">
-              <a href="${escapeHtml(stashboxSceneHref)}" target="_blank" rel="noopener">${escapeHtml(d.stashbox_scene_title || 'Unknown')}</a>
+              <a href="${escapeHtml(stashboxSceneHref)}" target="_blank" rel="noopener">${escapeHtmlBreakable(d.stashbox_scene_title || 'Unknown')}</a>
             </div>
             ${upstreamStudioLink ? `<div class="ss-fp-field"><strong>Studio:</strong> ${upstreamStudioLink}</div>` : ''}
             ${upstreamPerformerLinks ? `<div class="ss-fp-field"><strong>Performers:</strong> ${upstreamPerformerLinks}</div>` : ''}
@@ -5631,6 +5631,15 @@
     const div = document.createElement('div');
     div.appendChild(document.createTextNode(String(str)));
     return div.innerHTML;
+  }
+
+  /**
+   * Escape HTML and insert <wbr> break opportunities after underscores and
+   * dashes, so long titles/filenames with no spaces (e.g. "some_long_file-
+   * name_2024.mp4") still wrap instead of overflowing their container.
+   */
+  function escapeHtmlBreakable(str) {
+    return escapeHtml(str).replace(/([_-])/g, '$1<wbr>');
   }
 
   /**

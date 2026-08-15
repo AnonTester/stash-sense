@@ -3582,6 +3582,7 @@ a.ss-upstream-endpoint-badge:hover {
 
 .ss-fp-detail-side {
   flex: 1;
+  min-width: 0;
   padding: 1rem;
   background: var(--bs-body-bg, #1a1a1a);
   border-radius: 0.5rem;
@@ -3598,6 +3599,7 @@ a.ss-upstream-endpoint-badge:hover {
   margin: 0 0 0.6rem 0;
   font-size: 14px;
   font-weight: 600;
+  overflow-wrap: break-word;
 }
 
 .ss-fp-scene-title a {
@@ -3619,6 +3621,7 @@ a.ss-upstream-endpoint-badge:hover {
   margin: 0.4rem 0;
   font-size: 0.9rem;
   color: var(--bs-secondary-color, #aaa);
+  overflow-wrap: break-word;
 }
 
 .ss-fp-field strong {
