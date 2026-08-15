@@ -1,3 +1,14 @@
+## 2026-08-16
+
+### 0.12.7
+- Feature: When fingerprinting finds zero usable faces in a scene, it now
+  retries once with the same number of sampled frames but the whole
+  sampling grid shifted by half a frame interval, landing on entirely
+  different timestamps (uniform frame sampling is deterministic, so
+  retrying with the same settings would just re-extract the identical
+  frames and get the identical empty result). If the retry also finds
+  nothing, the scene is accepted as having no identifiable faces.
+
 ## 2026-08-15
 
 ### 0.12.6

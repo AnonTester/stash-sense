@@ -92,6 +92,8 @@ class FingerprintResult:
     fingerprint_id: Optional[int] = None
     performers_found: int = 0
     frames_analyzed: int = 0
+    faces_found: int = 0
+    retried_with_shifted_frames: bool = False
     error: Optional[str] = None
 
 
@@ -117,6 +119,8 @@ class SceneFingerprintGenerator:
         num_frames: int = face_config.NUM_FRAMES,
         min_face_size: int = face_config.MIN_FACE_SIZE,
         max_distance: float = face_config.MAX_DISTANCE,
+        start_offset_pct: float = face_config.START_OFFSET_PCT,
+        end_offset_pct: float = face_config.END_OFFSET_PCT,
     ):
         self.stash = stash_client
         self.rec_db = rec_db
@@ -127,6 +131,8 @@ class SceneFingerprintGenerator:
         self.num_frames = num_frames
         self.min_face_size = min_face_size
         self.max_distance = max_distance
+        self.start_offset_pct = start_offset_pct
+        self.end_offset_pct = end_offset_pct
 
         # State
         self._status = GeneratorStatus.IDLE
@@ -300,9 +306,11 @@ class SceneFingerprintGenerator:
                         self._progress.successful += 1
                         batch_successful += 1
                         logger.debug(
-                            "Scene %d (%s): fingerprinted — performers_found=%d, frames=%d",
+                            "Scene %d (%s): fingerprinted — performers_found=%d, faces_found=%d, "
+                            "frames=%d%s",
                             scene_id, scene_title,
-                            result.performers_found, result.frames_analyzed,
+                            result.performers_found, result.faces_found, result.frames_analyzed,
+                            " (retried with shifted frames)" if result.retried_with_shifted_frames else "",
                         )
                     else:
                         self._progress.failed += 1
@@ -384,7 +392,48 @@ class SceneFingerprintGenerator:
         return await self._identify_scene(scene_id)
 
     async def _identify_scene(self, scene_id: int) -> FingerprintResult:
-        """Call the /identify/scene endpoint to generate and save fingerprint."""
+        """Call /identify/scene to generate and save a fingerprint, retrying
+        once with a shifted sampling grid if the first pass finds no usable
+        faces at all.
+
+        Frame sampling is deterministic (uniform timestamps derived purely
+        from num_frames/start_offset_pct/end_offset_pct), so a scene whose
+        only faces fall between sampled instants would report "no faces"
+        forever no matter how many times it's reprocessed with the same
+        settings. The retry keeps num_frames the same but shifts the whole
+        sampling grid by half a sampling interval, landing on entirely
+        different timestamps -- interleaved with the first pass's. If that
+        also finds nothing, the scene is accepted as having no identifiable
+        faces (matches success, just faces_found=0).
+        """
+        result = await self._call_identify(scene_id, self.start_offset_pct, self.end_offset_pct)
+
+        if result.success and result.faces_found == 0:
+            interval_pct = (self.end_offset_pct - self.start_offset_pct) / max(1, self.num_frames - 1)
+            half_shift = interval_pct / 2
+            shifted_start = min(1.0, self.start_offset_pct + half_shift)
+            shifted_end = min(1.0, self.end_offset_pct + half_shift)
+            logger.debug(
+                "Scene %d: no faces in first pass, retrying with frames shifted "
+                "(%.4f-%.4f) -> (%.4f-%.4f)",
+                scene_id, self.start_offset_pct, self.end_offset_pct, shifted_start, shifted_end,
+            )
+            retry_result = await self._call_identify(scene_id, shifted_start, shifted_end)
+            if retry_result.success:
+                # Whatever this pass found (or didn't) is now the final,
+                # authoritative result -- give up after one retry either way.
+                retry_result.retried_with_shifted_frames = True
+                return retry_result
+            # Retry itself errored (timeout, etc.) -- keep the good first
+            # result rather than discarding a confirmed "0 faces" for it.
+
+        return result
+
+    async def _call_identify(
+        self, scene_id: int, start_offset_pct: float, end_offset_pct: float,
+    ) -> FingerprintResult:
+        """Single call to /identify/scene with the given sampling window.
+        See _identify_scene for the retry wrapper around this."""
         try:
             async with httpx.AsyncClient(timeout=300.0) as client:
                 response = await client.post(
@@ -394,6 +443,8 @@ class SceneFingerprintGenerator:
                         "num_frames": self.num_frames,
                         "min_face_size": self.min_face_size,
                         "max_distance": self.max_distance,
+                        "start_offset_pct": start_offset_pct,
+                        "end_offset_pct": end_offset_pct,
                         "matching_mode": "hybrid",
                     },
                 )
@@ -402,6 +453,7 @@ class SceneFingerprintGenerator:
                     data = response.json()
                     persons = data.get("persons", [])
                     performers_found = sum(1 for p in persons if p.get("best_match"))
+                    faces_found = data.get("faces_after_filter", data.get("faces_detected", 0))
 
                     # Check if fingerprint was actually saved
                     fingerprint_saved = data.get("fingerprint_saved", False)
@@ -417,6 +469,7 @@ class SceneFingerprintGenerator:
                             error=f"Save failed: {error_msg}",
                             performers_found=performers_found,
                             frames_analyzed=data.get("frames_analyzed", 0),
+                            faces_found=faces_found,
                         )
 
                     return FingerprintResult(
@@ -424,6 +477,7 @@ class SceneFingerprintGenerator:
                         success=True,
                         performers_found=performers_found,
                         frames_analyzed=data.get("frames_analyzed", 0),
+                        faces_found=faces_found,
                     )
                 else:
                     error_detail = response.json().get("detail", response.text)
