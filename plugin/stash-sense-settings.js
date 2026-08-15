@@ -45,6 +45,9 @@
     async getFingerprintStatus() {
       return apiCall('fp_status');
     },
+    async startFingerprintGeneration() {
+      return apiCall('queue_submit', { type: 'fingerprint_generation' });
+    },
     async checkUpdate() {
       return apiCall('db_check_update');
     },
@@ -525,8 +528,30 @@
           <span class="ss-db-stat-value">${missing.toLocaleString()}</span>
           <span class="ss-db-stat-label">Missing</span>
         </div>
+        <button class="ss-btn ss-btn-primary ss-btn-sm ss-start-fingerprinting-btn" id="ss-start-fingerprinting-btn">
+          Start Fingerprinting
+        </button>
         ` : ''}
       `;
+
+      const startBtn = fingerprintStatsEl.querySelector('#ss-start-fingerprinting-btn');
+      if (startBtn) {
+        startBtn.addEventListener('click', async () => {
+          startBtn.disabled = true;
+          startBtn.textContent = 'Starting…';
+          try {
+            await SettingsAPI.startFingerprintGeneration();
+            startBtn.textContent = 'Started — see Operations tab';
+          } catch (e) {
+            const msg = String(e.message || '');
+            startBtn.textContent = msg.includes('409') || msg.includes('already') ? 'Already Running' : 'Error';
+            setTimeout(() => {
+              startBtn.textContent = 'Start Fingerprinting';
+              startBtn.disabled = false;
+            }, 2500);
+          }
+        });
+      }
     } catch (e) {
       const errHtml = `<span style="color:#888;font-size:13px;">Failed to load: ${e.message}</span>`;
       performerStatsEl.innerHTML = errHtml;

@@ -1,5 +1,19 @@
 ## 2026-08-15
 
+### 0.12.6
+- Fix: Fingerprint generation's ETA used a lifetime-average rate
+  (items_processed / time since the job started), which goes badly stale
+  when a job has distinct phases -- e.g. skipping thousands of
+  already-complete scenes in seconds, then hitting real work. The average
+  stayed anchored near that fast opening burst for the rest of the run, so
+  the ETA could read "1s remaining" through an 11-minute real-work phase.
+  Now computed from a rolling ~30s window of recent progress samples
+  instead, so it tracks the job's current pace.
+- Improvement: When the Identification Database's "Missing" fingerprint
+  count is shown, a "Start Fingerprinting" button now sits next to it
+  (submits the same fingerprint_generation queue job as the Operations
+  tab's quick action).
+
 ### 0.12.5
 - Cleanup: Removed the dead legacy fingerprint-generator singleton
   (fingerprint_generator.get_generator()/set_generator()) and everything

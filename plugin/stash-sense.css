@@ -1798,6 +1798,11 @@
   color: #ffc107;
 }
 
+.ss-start-fingerprinting-btn {
+  align-self: center;
+  white-space: nowrap;
+}
+
 /* Legacy fingerprint progress (kept for operations tab) */
 .ss-fingerprint-progress {
   background: var(--bs-tertiary-bg, #333);

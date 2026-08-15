@@ -47,6 +47,36 @@
   let historyExpanded = true;
   const FORCE_FULL_SCAN_USER_JOB_TYPES = new Set(['scene_fingerprint_match', 'upstream_scene_changes']);
 
+  // Recent-rate tracking for ETA. A lifetime average (items_processed /
+  // time since started_at) goes badly stale across a phase change within
+  // one job -- e.g. fingerprint generation skips thousands of
+  // already-complete scenes in seconds, then hits real work; the lifetime
+  // average stays anchored near that fast burst for the rest of the run,
+  // so the ETA can read "1s remaining" for the entire slow phase. Track a
+  // short rolling window of (time, items_processed) samples per job instead.
+  const progressHistory = new Map(); // job.id -> [{ t, processed }, ...]
+  const PROGRESS_HISTORY_WINDOW_MS = 30000;
+
+  function recordProgressSamples(jobs) {
+    const now = Date.now();
+    const activeIds = new Set();
+    for (const job of jobs) {
+      if (job.status !== 'running' || job.items_processed == null) continue;
+      activeIds.add(job.id);
+      const history = progressHistory.get(job.id) || [];
+      history.push({ t: now, processed: job.items_processed });
+      const cutoff = now - PROGRESS_HISTORY_WINDOW_MS;
+      while (history.length > 2 && history[1].t < cutoff) {
+        history.shift();
+      }
+      progressHistory.set(job.id, history);
+    }
+    // Drop history for jobs no longer running (finished, or no longer returned).
+    for (const id of progressHistory.keys()) {
+      if (!activeIds.has(id)) progressHistory.delete(id);
+    }
+  }
+
   function ensurePolling(container) {
     if (!pollInterval) {
       startPolling(container);
@@ -89,6 +119,8 @@
   }
 
   function renderContent(container, status, jobs) {
+    recordProgressSamples(jobs);
+
     container.innerHTML = '';
 
     // Header
@@ -467,13 +499,37 @@
   }
 
   function getETA(job) {
-    if (!job.started_at || !job.items_total || !job.items_processed || job.items_processed <= 0) return null;
+    if (!job.items_total || !job.items_processed || job.items_processed <= 0) return null;
+    const remaining = job.items_total - job.items_processed;
+    if (remaining <= 0) return null;
+
+    // Prefer a recent-window rate (see recordProgressSamples) so the
+    // estimate tracks the job's *current* pace, not its pace since it
+    // started -- important for jobs like fingerprint generation that skip
+    // already-complete items fast before hitting real work.
+    const history = progressHistory.get(job.id);
+    if (history && history.length >= 2) {
+      const oldest = history[0];
+      const latest = history[history.length - 1];
+      const dt = (latest.t - oldest.t) / 1000;
+      const dItems = latest.processed - oldest.processed;
+      if (dt >= 3 && dItems > 0) {
+        return formatDuration(remaining / (dItems / dt));
+      }
+      // Full window with zero progress (a single slow item, or genuinely
+      // stalled) -- don't fall back to a stale lifetime average that could
+      // under-report; just omit the ETA rather than mislead.
+      if (dt >= PROGRESS_HISTORY_WINDOW_MS / 1000 - 1) return null;
+    }
+
+    // Not enough recent samples yet (job just started) -- lifetime average
+    // is a reasonable bootstrap estimate until the rolling window fills in.
+    if (!job.started_at) return null;
     const start = parseUtcDate(job.started_at);
     if (!start) return null;
     const elapsed = (new Date() - start) / 1000;
-    if (elapsed < 3) return null;  // Too early for meaningful estimate
+    if (elapsed < 3) return null;
     const rate = job.items_processed / elapsed;
-    const remaining = job.items_total - job.items_processed;
     return formatDuration(remaining / rate);
   }
 
