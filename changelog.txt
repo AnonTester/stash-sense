@@ -1,3 +1,18 @@
+## 2026-08-15
+
+### 0.11.0
+- Feature: database updates can now apply a small delta package instead of
+  re-downloading the full ~2GB release every cycle, when a complete delta
+  chain exists from the currently-installed version to latest (walks
+  release history via DATABASE_UPDATE_REPO, falls back to the existing
+  full-zip path on any gap or a fresh install). New api/delta_applier.py;
+  database_updater.py's check_update()/start_update() are delta-aware
+  (POST /database/update accepts ?method=auto|delta|full, default auto).
+  Settings UI now shows delta vs. full download size on the update badge.
+  Same backup/rollback safety guarantee as the existing full-download path
+  — a failed delta chain rolls back to the pre-update state, nothing is
+  left half-applied.
+
 ## 2026-08-14
 
 ### 0.10.0

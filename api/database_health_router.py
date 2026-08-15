@@ -77,6 +77,11 @@ class CheckUpdateResponse(BaseModel):
     download_size_mb: Optional[int] = None
     published_at: Optional[str] = None
     error: Optional[str] = None
+    # Delta path: a small download covering only what changed, when a
+    # complete chain from current_version to latest_version exists.
+    delta_available: bool = False
+    delta_chain_length: Optional[int] = None
+    delta_download_size_mb: Optional[float] = None
 
 
 class StartUpdateResponse(BaseModel):
@@ -184,8 +189,14 @@ async def check_database_update():
 
 
 @router.post("/database/update", response_model=StartUpdateResponse)
-async def start_database_update():
-    """Trigger a database update."""
+async def start_database_update(method: str = "auto"):
+    """Trigger a database update.
+
+    `method`: "auto" (default, prefers the small delta chain when a
+    complete one exists) | "delta" (same as auto, explicit) | "full"
+    (force the full-zip download even if a delta chain is available —
+    useful for a clean re-sync).
+    """
     if _db_updater is None:
         raise HTTPException(status_code=503, detail="Updater not initialized")
     if _db_updater._update_task and not _db_updater._update_task.done():
@@ -194,10 +205,15 @@ async def start_database_update():
     check = await _db_updater.check_update(force=True)
     if not check.get("update_available"):
         raise HTTPException(status_code=400, detail="Already on latest version")
-    job_id = await _db_updater.start_update(
-        download_url=check["download_url"],
-        target_version=check["latest_version"],
-    )
+
+    use_delta = method != "full" and check.get("delta_available")
+    if use_delta:
+        job_id = await _db_updater.start_delta_update(_db_updater._last_delta_chain)
+    else:
+        job_id = await _db_updater.start_update(
+            download_url=check["download_url"],
+            target_version=check["latest_version"],
+        )
     return StartUpdateResponse(job_id=job_id, status="started")
 
 

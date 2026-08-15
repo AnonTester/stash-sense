@@ -37,6 +37,8 @@ from typing import Any, Callable, Optional
 
 import httpx
 
+from delta_applier import apply_delta_chain, find_delta_chain
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -139,6 +141,12 @@ class DatabaseUpdater:
         # Background task handle
         self._update_task: Optional[asyncio.Task] = None
 
+        # Full hop details (incl. download URLs) for the delta chain found
+        # by the most recent check_update() — consumed by start_update()
+        # when choosing delta vs. full. Not part of the cached/returned
+        # result dict (that only carries summary fields for the API).
+        self._last_delta_chain: Optional[list[dict[str, Any]]] = None
+
     # ------------------------------------------------------------------
     # Public helpers
     # ------------------------------------------------------------------
@@ -192,18 +200,27 @@ class DatabaseUpdater:
     # ------------------------------------------------------------------
 
     async def check_update(self, force: bool = False) -> dict[str, Any]:
-        """Query the latest GitHub release tag and compare to local version.
+        """Query the latest GitHub release tag and compare to local version,
+        and separately check whether a delta chain (small download) can get
+        there instead of the full zip.
 
         Caching strategy (to avoid GitHub API rate limits on crash-loops):
         - Persistent file cache (12 h) — survives Docker restarts.
         - In-memory cache (10 min) — avoids redundant disk reads.
         - ``force=True`` — bypasses both caches (used by the manual UI action).
+
+        The delta chain's full hop details (download URLs) are cached too
+        (as an internal ``_delta_chain`` key, stripped before returning) so
+        a cache hit doesn't cost an extra GitHub API call, and so
+        ``start_update()`` can reuse whatever chain the most recent check
+        found via ``self._last_delta_chain`` without re-querying.
         """
         if not force:
             # Fast path: in-memory cache
             now = time.monotonic()
             if self._cache is not None and (now - self._cache_time) < CACHE_TTL_SECONDS:
-                return self._cache
+                self._last_delta_chain = self._cache.get("_delta_chain")
+                return self._public_result(self._cache)
 
             # Persistent cache — survives container restarts
             persistent = self._load_persistent_cache()
@@ -212,7 +229,8 @@ class DatabaseUpdater:
                 # within the same process don't hit the file again.
                 self._cache = persistent
                 self._cache_time = time.monotonic()
-                return persistent
+                self._last_delta_chain = persistent.get("_delta_chain")
+                return self._public_result(persistent)
 
         async with httpx.AsyncClient() as client:
             resp = await client.get(GITHUB_API_URL, follow_redirects=True)
@@ -222,11 +240,14 @@ class DatabaseUpdater:
         latest_tag: str = release["tag_name"].lstrip("v")
         current = self._get_current_version()
 
-        # Find the zip asset download URL
+        # Find the *full bundle* zip asset — must match the naming
+        # convention exactly (not just "any .zip"), now that delta zips
+        # (stash-sense-delta-*.zip) live on the same release and asset
+        # order isn't a contract worth relying on.
         download_url: Optional[str] = None
         download_size_mb: Optional[int] = None
         for asset in release.get("assets", []):
-            if asset["name"].endswith(".zip"):
+            if asset["name"].startswith("stash-sense-data-") and asset["name"].endswith(".zip"):
                 download_url = asset["browser_download_url"]
                 size_bytes = asset.get("size")
                 if size_bytes:
@@ -234,6 +255,13 @@ class DatabaseUpdater:
                 break
 
         update_available = current is None or latest_tag > current
+
+        delta_chain: Optional[list[dict[str, Any]]] = None
+        if current is not None:
+            try:
+                delta_chain = await find_delta_chain(GITHUB_REPO, current)
+            except Exception as exc:
+                logger.warning("Delta chain lookup failed, will offer full download only: %s", exc)
 
         result: dict[str, Any] = {
             "update_available": update_available,
@@ -243,13 +271,25 @@ class DatabaseUpdater:
             "download_url": download_url,
             "download_size_mb": download_size_mb,
             "published_at": release.get("published_at"),
+            "delta_available": bool(delta_chain),
+            "delta_chain_length": len(delta_chain) if delta_chain else None,
+            "delta_download_size_mb": round(sum(h["size_mb"] for h in delta_chain), 2) if delta_chain else None,
+            "_delta_chain": delta_chain,
         }
 
-        # Update both caches
+        # Update both caches (with the internal chain details included —
+        # see docstring)
         self._cache = result
         self._cache_time = time.monotonic()
         self._save_persistent_cache(result)
-        return result
+        self._last_delta_chain = delta_chain
+        return self._public_result(result)
+
+    @staticmethod
+    def _public_result(result: dict[str, Any]) -> dict[str, Any]:
+        """Strip internal-only keys (full delta hop details) before this
+        goes anywhere near the API response model."""
+        return {k: v for k, v in result.items() if not k.startswith("_")}
 
     # ------------------------------------------------------------------
     # Start / run update
@@ -341,6 +381,60 @@ class DatabaseUpdater:
             # Clean up temp working directory
             if work_dir.exists():
                 shutil.rmtree(work_dir, ignore_errors=True)
+
+    # ------------------------------------------------------------------
+    # Delta update (small download, when a chain to latest exists)
+    # ------------------------------------------------------------------
+
+    async def start_delta_update(self, chain: list[dict[str, Any]]) -> str:
+        """Kick off delta-chain application in a background task. Mirrors
+        start_update()'s single-task guard; returns a job ID."""
+        if self._update_task is not None and not self._update_task.done():
+            raise RuntimeError("Update already running")
+
+        job_id = uuid.uuid4().hex[:12]
+        self._state.target_version = chain[-1]["to_version"] if chain else self._get_current_version()
+        self._update_task = asyncio.create_task(self._run_delta_update(chain))
+        return job_id
+
+    async def _run_delta_update(self, chain: list[dict[str, Any]]) -> None:
+        """Run apply_delta_chain() and reflect its progress/outcome in
+        self._state, same shape as _run_update(). Unlike _run_update, no
+        separate backup/rollback here — apply_delta_chain() already
+        guarantees the data dir is fully applied or fully rolled back
+        before it returns/raises, covering the whole chain as one unit.
+        """
+        try:
+            self._state.status = UpdateStatus.DOWNLOADING
+            self._state.progress_pct = 0
+
+            def _progress(pct: int) -> None:
+                self._state.status = UpdateStatus.SWAPPING
+                self._state.progress_pct = pct
+
+            result = await apply_delta_chain(chain, self._data_dir, progress_cb=_progress)
+
+            self._state.status = UpdateStatus.RELOADING
+            self._state.progress_pct = 95
+            self._reload_fn(self._data_dir)
+
+            self._state.status = UpdateStatus.COMPLETE
+            self._state.progress_pct = 100
+            self._state.current_version = result.get("new_version", self._state.current_version)
+
+            self._cache = None
+            self._last_delta_chain = None
+            try:
+                self._persistent_cache_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+            logger.warning("Delta update to %s complete: %s", self._state.current_version, result)
+
+        except Exception as exc:
+            logger.warning("Delta update failed (rolled back automatically): %s", exc)
+            self._state.status = UpdateStatus.FAILED
+            self._state.error = str(exc)
 
     # ------------------------------------------------------------------
     # Pipeline stages

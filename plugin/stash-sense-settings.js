@@ -466,7 +466,13 @@
           <span class="ss-db-stat-label">Version</span>
           ${updateInfo && updateInfo.update_available ? `
             <div class="ss-update-badge">
-              <span class="ss-update-badge-text">v${updateInfo.latest_version} available</span>
+              <span class="ss-update-badge-text">v${updateInfo.latest_version} available${
+                updateInfo.delta_available
+                  ? ` \u2014 ${updateInfo.delta_download_size_mb} MB via delta (${updateInfo.delta_chain_length} release${updateInfo.delta_chain_length === 1 ? '' : 's'} behind)`
+                  : updateInfo.download_size_mb
+                    ? ` \u2014 ${updateInfo.download_size_mb} MB full download`
+                    : ''
+              }</span>
             </div>
           ` : ''}
         </div>

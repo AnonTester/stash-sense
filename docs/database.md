@@ -87,6 +87,18 @@ curl http://localhost:6960/database/check-update
 curl -X POST http://localhost:6960/database/update
 ```
 
+By default this prefers a **delta update** — a small package covering only
+what changed since your installed version — when a complete chain of
+deltas exists back to your current version (checked via
+`/database/check-update`'s `delta_available`/`delta_chain_length`/
+`delta_download_size_mb` fields). If any release in that chain is missing
+its delta asset, or you're on a very old version, it transparently falls
+back to the full download — same safety guarantees either way (backup
+before, checksum-verified, automatic rollback on failure). Pass
+`?method=full` to force the full download even when a delta chain is
+available (e.g. for a clean re-sync), or `?method=delta` to require the
+delta path explicitly.
+
 **Check update progress:**
 
 ```bash
