@@ -1509,11 +1509,15 @@ async def get_fingerprint_status():
         stash_scene_ids = await stash.get_all_scene_ids()
         total_scenes = len(stash_scene_ids)
 
-        fingerprinted_ids = db.get_fingerprinted_scene_ids()
-        orphaned_ids = fingerprinted_ids - stash_scene_ids
+        # Orphan check covers every fingerprint row regardless of status --
+        # an 'error' row for a deleted scene is just as orphaned as a
+        # 'complete' one.
+        all_fingerprinted_ids = db.get_all_fingerprint_scene_ids()
+        orphaned_ids = all_fingerprinted_ids - stash_scene_ids
         if orphaned_ids:
             db.delete_fingerprints_for_scenes(list(orphaned_ids))
-            complete_fingerprints = len(fingerprinted_ids) - len(orphaned_ids)
+            # Orphans are gone from the table now, so a fresh count is accurate.
+            complete_fingerprints = len(db.get_fingerprinted_scene_ids())
             logger.warning(
                 "Pruned %d orphaned scene fingerprint(s) for scenes no longer in Stash",
                 len(orphaned_ids),

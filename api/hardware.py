@@ -53,24 +53,26 @@ def _classify_tier(gpu_available: bool, gpu_vram_mb: Optional[int]) -> str:
 def _probe_gpu() -> tuple[bool, Optional[str], Optional[int]]:
     """Probe GPU via ONNX Runtime providers and pynvml.
 
+    onnxruntime listing "CUDAExecutionProvider" only means the library was
+    *built* with CUDA support -- it says nothing about whether a real
+    NVIDIA GPU is actually present (e.g. this Docker image is built FROM
+    an nvidia/cuda base image, so the provider always shows up even on an
+    AMD-only host). pynvml is the authoritative check: it actually talks to
+    the NVIDIA driver, so if it can't init or find a device, there is no
+    usable GPU regardless of what onnxruntime claims to support.
+
     Returns:
         (gpu_available, gpu_name, gpu_vram_mb)
     """
-    # Check if ONNX Runtime has CUDA
-    gpu_available = False
     try:
         import onnxruntime as ort
         providers = ort.get_available_providers()
-        gpu_available = "CUDAExecutionProvider" in providers
+        if "CUDAExecutionProvider" not in providers:
+            return False, None, None
     except Exception as e:
         logger.debug("ONNX Runtime CUDA probe failed: %s", e)
-
-    if not gpu_available:
         return False, None, None
 
-    # Try pynvml for detailed GPU info
-    gpu_name = None
-    gpu_vram_mb = None
     try:
         import pynvml
         pynvml.nvmlInit()
@@ -81,13 +83,12 @@ def _probe_gpu() -> tuple[bool, Optional[str], Optional[int]]:
                 gpu_name = gpu_name.decode("utf-8")
             mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
             gpu_vram_mb = mem_info.total // (1024 * 1024)
+            return True, gpu_name, gpu_vram_mb
         finally:
             pynvml.nvmlShutdown()
     except Exception as e:
-        logger.debug(f"pynvml unavailable, using basic GPU detection: {e}")
-        gpu_name = "NVIDIA GPU (details unavailable)"
-
-    return True, gpu_name, gpu_vram_mb
+        logger.debug(f"pynvml found no usable NVIDIA GPU: {e}")
+        return False, None, None
 
 
 def _probe_cpu() -> int:

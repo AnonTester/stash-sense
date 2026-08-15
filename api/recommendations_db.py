@@ -1590,6 +1590,17 @@ class RecommendationsDB:
             ).fetchall()
             return {row[0] for row in rows}
 
+    def get_all_fingerprint_scene_ids(self) -> set[int]:
+        """Scene IDs with any scene_fingerprints row, regardless of status.
+
+        Orphan detection needs this (not just the 'complete' subset above)
+        -- a scene deleted from Stash mid-error-retry leaves an orphaned
+        'error' row just as easily as a 'complete' one.
+        """
+        with self._connection() as conn:
+            rows = conn.execute("SELECT stash_scene_id FROM scene_fingerprints").fetchall()
+            return {row[0] for row in rows}
+
     def delete_fingerprints_for_scenes(self, scene_ids: list[int]) -> int:
         """Delete all fingerprint and signal-cache data for scenes that no
         longer exist in Stash. Returns the number of scene_fingerprints

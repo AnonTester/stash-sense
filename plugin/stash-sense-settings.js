@@ -536,6 +536,19 @@
     return section;
   }
 
+  // Re-fetch and swap in fresh stats without re-rendering the whole settings
+  // page. The settings panel is only built once (see injectSettingsTab's
+  // `dataset.loaded` guard) and just toggled visible/hidden after that, so
+  // these numbers would otherwise stay frozen at whatever they were on
+  // first load -- e.g. still showing stale "Missing" count after switching
+  // away to run fingerprint generation and back once it finishes.
+  async function refreshIdDatabaseSection() {
+    const existing = document.querySelector('#ss-settings .ss-id-database-settings-section');
+    if (!existing) return;
+    const fresh = await renderIdDatabaseSection();
+    existing.replaceWith(fresh);
+  }
+
   function renderHardwareBanner(info) {
     const hw = info.hardware;
     const banner = SS.createElement('div', { className: 'ss-hw-banner' });
@@ -1802,13 +1815,19 @@
         recContent.style.display = tabName === 'recommendations' ? '' : 'none';
         settingsPanel.style.display = tabName === 'settings' ? '' : 'none';
 
-        // Lazy load settings on first view
-        if (tabName === 'settings' && !settingsPanel.dataset.loaded) {
-          settingsPanel.dataset.loaded = 'true';
-          renderSettings(settingsPanel);
-        }
-
         if (tabName === 'settings') {
+          if (!settingsPanel.dataset.loaded) {
+            // First view: full render.
+            settingsPanel.dataset.loaded = 'true';
+            renderSettings(settingsPanel);
+          } else {
+            // Already rendered once -- just refresh fingerprint/database
+            // coverage stats rather than the whole page, so e.g. running
+            // fingerprint generation from the Operations tab and switching
+            // back here shows current numbers instead of whatever was
+            // loaded the first time this tab was opened.
+            refreshIdDatabaseSection();
+          }
           // Refresh log file list immediately and start 5-second polling
           setTimeout(startLogRefresh, 200);
         } else {

@@ -911,31 +911,35 @@ async def _identify_scene_from_cache(
     top_names = [p.best_match.name for p in persons[:3] if p.best_match]
     print(f"[identify_scene] [{time.time()-t_start:.1f}s] === DONE (cache) === Top matches: {', '.join(top_names)}")
 
+    # Save the fingerprint even when zero performers matched -- that's a
+    # valid, complete result (this scene simply has nobody recognizable in
+    # it), not an error. Gating the save on non-empty performer_data left
+    # the pre-emptive "error" status row (written before matching ever
+    # runs) permanently in place for any such scene, so it never flipped
+    # to "complete" no matter how many times fingerprinting re-ran.
     fingerprint_saved = False
     fingerprint_error = None
-    if persons:
-        performer_data = []
-        for person in persons:
-            if person.best_match:
-                avg_distance = person.best_match.distance
-                avg_confidence = max(0, 1 - avg_distance) if avg_distance is not None else None
-                performer_data.append({
-                    "performer_id": person.best_match.stashdb_id,
-                    "face_count": person.frame_count,
-                    "avg_confidence": avg_confidence,
-                })
-        if performer_data:
-            current_db_version = _db_manifest.get("version")
-            fp_id, fp_error = save_scene_fingerprint(
-                scene_id=scene_id_int,
-                frames_analyzed=cache_meta["frames_analyzed"],
-                performer_data=performer_data,
-                db_version=current_db_version,
-            )
-            if fp_id:
-                fingerprint_saved = True
-            else:
-                fingerprint_error = fp_error
+    performer_data = []
+    for person in persons:
+        if person.best_match:
+            avg_distance = person.best_match.distance
+            avg_confidence = max(0, 1 - avg_distance) if avg_distance is not None else None
+            performer_data.append({
+                "performer_id": person.best_match.stashdb_id,
+                "face_count": person.frame_count,
+                "avg_confidence": avg_confidence,
+            })
+    current_db_version = _db_manifest.get("version")
+    fp_id, fp_error = save_scene_fingerprint(
+        scene_id=scene_id_int,
+        frames_analyzed=cache_meta["frames_analyzed"],
+        performer_data=performer_data,
+        db_version=current_db_version,
+    )
+    if fp_id:
+        fingerprint_saved = True
+    else:
+        fingerprint_error = fp_error
 
     timing_data = {
         "total_ms": round((time.time() - t_start) * 1000),
@@ -1358,37 +1362,43 @@ async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_ava
     top_names = [p.best_match.name for p in persons[:3] if p.best_match]
     print(f"[identify_scene] [{time.time()-t_start:.1f}s] === DONE === Top matches: {', '.join(top_names)}")
 
-    # Persist fingerprint to stash_sense.db for duplicate detection
+    # Persist fingerprint to stash_sense.db for duplicate detection.
+    #
+    # Save even when zero performers matched -- that's a valid, complete
+    # result (nobody recognizable in this scene), not an error. Gating the
+    # save on non-empty performer_data left the pre-emptive "error" status
+    # row (written before matching ever runs, see the fingerprint generator's
+    # create_scene_fingerprint call) permanently in place for any such
+    # scene: it never flipped to "complete" no matter how many times
+    # fingerprinting re-ran, silently inflating the "missing" count forever.
     fingerprint_saved = False
     fingerprint_error = None
 
-    if persons:
-        performer_data = []
-        for person in persons:
-            if person.best_match:
-                # Convert distance to confidence (0-1 scale, lower distance = higher confidence)
-                avg_distance = person.best_match.distance
-                avg_confidence = max(0, 1 - avg_distance) if avg_distance is not None else None
-                performer_data.append({
-                    "performer_id": person.best_match.stashdb_id,
-                    "face_count": person.frame_count,
-                    "avg_confidence": avg_confidence,
-                })
+    performer_data = []
+    for person in persons:
+        if person.best_match:
+            # Convert distance to confidence (0-1 scale, lower distance = higher confidence)
+            avg_distance = person.best_match.distance
+            avg_confidence = max(0, 1 - avg_distance) if avg_distance is not None else None
+            performer_data.append({
+                "performer_id": person.best_match.stashdb_id,
+                "face_count": person.frame_count,
+                "avg_confidence": avg_confidence,
+            })
 
-        if performer_data:
-            current_db_version = _db_manifest.get("version")
-            fp_id, fp_error = save_scene_fingerprint(
-                scene_id=int(request.scene_id),
-                frames_analyzed=len(extraction_result.frames),
-                performer_data=performer_data,
-                db_version=current_db_version,
-            )
-            if fp_id:
-                fingerprint_saved = True
-                print(f"[identify_scene] [{time.time()-t_start:.1f}s] Saved fingerprint #{fp_id} with {len(performer_data)} performers")
-            else:
-                fingerprint_error = fp_error
-                print(f"[identify_scene] [{time.time()-t_start:.1f}s] Failed to save fingerprint: {fp_error}")
+    current_db_version = _db_manifest.get("version")
+    fp_id, fp_error = save_scene_fingerprint(
+        scene_id=int(request.scene_id),
+        frames_analyzed=len(extraction_result.frames),
+        performer_data=performer_data,
+        db_version=current_db_version,
+    )
+    if fp_id:
+        fingerprint_saved = True
+        print(f"[identify_scene] [{time.time()-t_start:.1f}s] Saved fingerprint #{fp_id} with {len(performer_data)} performers")
+    else:
+        fingerprint_error = fp_error
+        print(f"[identify_scene] [{time.time()-t_start:.1f}s] Failed to save fingerprint: {fp_error}")
 
     timing_data = {
         "total_ms": round((time.time() - t_start) * 1000),

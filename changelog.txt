@@ -1,5 +1,39 @@
 ## 2026-08-15
 
+### 0.12.4
+- Fix: The 0.12.2 orphaned-fingerprint prune only covered 'complete'
+  status rows -- an 'error' row for a scene since deleted from Stash is
+  just as orphaned and was left behind. Orphan detection now checks
+  every scene_fingerprints row regardless of status.
+- Fix: Identification Database stats on the Settings tab were only
+  fetched once, the first time that tab was opened -- switching away
+  and back (e.g. after running fingerprint generation from Operations)
+  kept showing whatever numbers were current at first load until a full
+  page refresh. Now refetched every time the Settings tab is switched to.
+- Fix: Hardware detection reported "NVIDIA GPU (details unavailable)"
+  and tier gpu-low on hosts with no NVIDIA GPU at all (e.g. AMD iGPU-only
+  machines). onnxruntime listing CUDAExecutionProvider only means the
+  library was built with CUDA support -- it says nothing about whether a
+  real device exists, and the sidecar's Docker image is built FROM an
+  nvidia/cuda base image regardless of host GPU vendor. pynvml (which
+  actually talks to the NVIDIA driver) was already being tried, but a
+  failure there only swapped in a vague GPU name instead of correcting
+  gpu_available. Now pynvml is the authoritative check: no real device
+  found means no GPU, full stop.
+
+### 0.12.3
+- Fix: A scene where fingerprinting ran successfully but matched zero
+  performers never got its fingerprint row marked "complete" --
+  /identify/scene only called save_scene_fingerprint() when at least one
+  performer was matched, so the pre-emptive "error" status row written
+  before matching starts was never overwritten. This made such scenes
+  permanently show up as "missing" no matter how many times fingerprint
+  generation re-ran (confirmed live: all 82 "missing" scenes on one
+  install had performers_found=0 in the debug log, not a processing
+  failure). Now saves the fingerprint (with an empty performer list)
+  whenever the pipeline actually completes, in both the full pipeline and
+  the 0.12.0 cache fast path.
+
 ### 0.12.2
 - Fix: Fingerprint generation (and two other paginated scene queries) had
   no explicit sort on their Stash GraphQL findScenes call, so pagination
