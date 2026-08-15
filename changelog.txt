@@ -1,5 +1,23 @@
 ## 2026-08-15
 
+### 0.12.1
+- Fix: Operations and Settings tab panels double-padded their horizontal
+  margin (they nest inside the Recommendations dashboard container, which
+  already pads 24px on each side, but each panel added its own 24px on
+  top). Now matches the Recommendations tab's margins.
+- Fix: Identification Database stat boxes (Settings tab) didn't size to
+  their content on mobile -- a fixed equal-width flex split squeezed every
+  box to the same width regardless of content, so long text (e.g. the
+  "update available" badge on the Version box) overflowed past the box
+  edges left and right instead of wrapping.
+- Improvement: Recommendation type cards on the dashboard are now fully
+  clickable (with a hover background change matching the old button) and
+  keyboard-operable; removed the redundant "View All" button.
+- Improvement: "Accept All"/"Dismiss All" buttons are now hidden rather
+  than shown disabled when there are zero pending recommendations of that
+  type -- a greyed-out button read as broken rather than "nothing to act
+  on here."
+
 ### 0.12.0
 - Feature: Scene fingerprinting now caches the raw face/body/tattoo signals
   it extracts (FaceNet512/ArcFace vectors, MediaPipe body ratios,

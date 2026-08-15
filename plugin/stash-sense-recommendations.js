@@ -647,7 +647,7 @@
 
         const card = SS.createElement('div', {
           className: 'ss-type-card',
-          attrs: { 'data-type': type },
+          attrs: { 'data-type': type, tabindex: '0', role: 'button', 'aria-label': `View ${config.title}` },
           innerHTML: `
             <div class="ss-type-card-header">
               <span class="ss-type-icon">${config.icon}</span>
@@ -671,17 +671,21 @@
                   <span class="ss-count-label">dismissed</span>
                 </div>
               </div>
-              <button class="ss-btn ss-btn-secondary ss-btn-sm" data-type="${type}">
-                View All
-              </button>
             </div>
           `,
         });
 
-        card.querySelector('button').addEventListener('click', () => {
+        const openType = () => {
           currentState.type = type;
           currentState.view = 'list';
           renderCurrentView(mainContainer);
+        };
+        card.addEventListener('click', openType);
+        card.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openType();
+          }
         });
 
         typeCards.appendChild(card);
@@ -1393,7 +1397,10 @@
       const listContent = container.querySelector('.ss-list-content');
 
       if (result.recommendations.length === 0) {
-        container.querySelectorAll('.ss-accept-all-btn, .ss-dismiss-all-btn').forEach(btn => { btn.disabled = true; });
+        // Nothing pending to act on -- hide these rather than just disabling
+        // them, since a greyed-out "Accept All"/"Dismiss All" reads as a
+        // broken button rather than "there's nothing here."
+        container.querySelectorAll('.ss-accept-all-btn, .ss-dismiss-all-btn').forEach(btn => { btn.style.display = 'none'; });
         listContent.innerHTML = `
           <div class="ss-empty-state">
             <p>No ${currentState.status} recommendations found.</p>

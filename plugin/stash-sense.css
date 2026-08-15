@@ -902,13 +902,20 @@
   background: var(--bs-tertiary-bg, #2a2a2a);
   border-radius: 10px;
   padding: 16px;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
 }
 
 .ss-type-card:hover,
-.ss-type-card:focus-within {
+.ss-type-card:focus-visible {
+  background: var(--bs-secondary-bg, #333);
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.ss-type-card:focus-visible {
+  outline: 2px solid var(--bs-primary, #0d6efd);
+  outline-offset: 2px;
 }
 
 .ss-type-card-header {
@@ -1742,14 +1749,19 @@
   background: var(--bs-tertiary-bg, #333);
   border-radius: 8px;
   min-width: 80px;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .ss-db-stat-value {
+  max-width: 100%;
   font-size: 1.3rem;
   font-weight: 700;
   color: var(--bs-body-color, #fff);
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: break-word;
+  text-align: center;
 }
 
 .ss-db-stat-label {
@@ -1910,7 +1922,12 @@
   }
 
   .ss-db-stat {
-    flex: 1;
+    /* flex-basis: auto (not the "flex: 1" shorthand's 0%) so each box
+       still sizes to its own content first, then grows into any
+       leftover row space -- otherwise every box is squeezed to the
+       same width regardless of content, and long text (e.g. the
+       update-available badge) overflows past its box. */
+    flex: 1 1 auto;
     min-width: 70px;
   }
 
@@ -2539,8 +2556,12 @@ a.ss-upstream-endpoint-badge:hover {
   align-items: center;
   gap: 4px;
   margin-top: 6px;
+  max-width: 100%;
 }
 .ss-update-badge-text {
+  max-width: 100%;
+  overflow-wrap: break-word;
+  text-align: center;
   color: #f0ad4e;
   font-size: 11px;
   font-weight: 500;
@@ -2625,7 +2646,10 @@ a.ss-upstream-endpoint-badge:hover {
 /* ==================== Settings Page ==================== */
 
 .ss-settings-page {
-  padding: 0 24px 24px;
+  /* No horizontal padding here -- this panel nests inside .ss-recommendations,
+     which already pads 24px on both sides. Adding more here double-pads it
+     relative to the Recommendations panel. */
+  padding: 0 0 24px;
 }
 
 .ss-settings-header h1 {
@@ -3087,7 +3111,9 @@ a.ss-upstream-endpoint-badge:hover {
 /* ==================== Operations Page ==================== */
 
 .ss-operations-page {
-  padding: 0 24px 24px;
+  /* Same reasoning as .ss-settings-page -- no horizontal padding, the
+     parent .ss-recommendations already provides it. */
+  padding: 0 0 24px;
 }
 
 .ss-operations-header h1 {
