@@ -460,18 +460,3 @@ class SceneFingerprintGenerator:
                 fingerprint_status="error", db_version=self.db_version,
             )
             return FingerprintResult(scene_id=scene_id, success=False, error=str(e))
-
-
-# Singleton generator instance for background processing
-_generator_instance: Optional[SceneFingerprintGenerator] = None
-
-
-def get_generator() -> Optional[SceneFingerprintGenerator]:
-    """Get the current generator instance."""
-    return _generator_instance
-
-
-def set_generator(generator: SceneFingerprintGenerator):
-    """Set the generator instance."""
-    global _generator_instance
-    _generator_instance = generator

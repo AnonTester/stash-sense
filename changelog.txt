@@ -1,5 +1,17 @@
 ## 2026-08-15
 
+### 0.12.5
+- Cleanup: Removed the dead legacy fingerprint-generator singleton
+  (fingerprint_generator.get_generator()/set_generator()) and everything
+  that read it -- FingerprintStatusResponse's generation_running/
+  generation_progress fields, and the whole GET /fingerprints/progress
+  endpoint. Nothing populated this singleton anymore once fingerprint
+  generation moved to the job queue (jobs/fingerprint_job.py builds its
+  own local generator instance and never registers it), and nothing in
+  the plugin UI read these fields -- confirmed while investigating the
+  0.12.4 "generation_running reports false while the job is still running"
+  finding.
+
 ### 0.12.4
 - Fix: The 0.12.2 orphaned-fingerprint prune only covered 'complete'
   status rows -- an 'error' row for a scene since deleted from Stash is

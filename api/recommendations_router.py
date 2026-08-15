@@ -409,21 +409,6 @@ class FingerprintRefreshAllResponse(BaseModel):
     message: str
 
 
-class FingerprintProgressResponse(BaseModel):
-    """Response for fingerprint generation progress."""
-    status: str
-    total_scenes: int = 0
-    processed_scenes: int = 0
-    successful: int = 0
-    failed: int = 0
-    skipped: int = 0
-    progress_pct: float = 0.0
-    current_scene_id: Optional[int] = None
-    current_scene_title: Optional[str] = None
-    error_message: Optional[str] = None
-    message: Optional[str] = None
-
-
 class FieldConfigEntry(BaseModel):
     """A single field config entry."""
     enabled: bool
@@ -1469,8 +1454,6 @@ class FingerprintStatusResponse(BaseModel):
     current_db_version: Optional[str]
     current_version_count: Optional[int] = None
     needs_refresh_count: Optional[int] = None
-    generation_running: bool = False
-    generation_progress: Optional[dict] = None
     total_scenes: Optional[int] = None
 
 
@@ -1488,12 +1471,6 @@ async def get_fingerprint_status():
     db = get_rec_db()
 
     stats = db.get_fingerprint_stats(_current_db_version)
-
-    # Check if generation is running
-    from fingerprint_generator import get_generator
-    generator = get_generator()
-    generation_running = generator is not None and generator.status.value == "running"
-    progress = generator.progress.to_dict() if generator else None
 
     # Total scene count from Stash itself, so the UI can show "missing"
     # without conflating it with the performer database's own counts. This
@@ -1533,8 +1510,6 @@ async def get_fingerprint_status():
         current_db_version=_current_db_version,
         current_version_count=stats.get("current_version_count"),
         needs_refresh_count=stats.get("needs_refresh_count"),
-        generation_running=generation_running,
-        generation_progress=progress,
         total_scenes=total_scenes,
     )
 
@@ -1570,21 +1545,6 @@ async def stop_fingerprint_generation():
         return {"message": "No fingerprint generation running"}
     _queue_manager.cancel(running[0]["id"])
     return {"message": "Stop requested"}
-
-
-@router.get("/fingerprints/progress", response_model=FingerprintProgressResponse)
-async def get_fingerprint_progress():
-    """Get current fingerprint generation progress."""
-    from fingerprint_generator import get_generator
-
-    generator = get_generator()
-    if not generator:
-        return {
-            "status": "idle",
-            "message": "No fingerprint generation has been started",
-        }
-
-    return generator.progress.to_dict()
 
 
 @router.post("/fingerprints/refresh", response_model=FingerprintRefreshResponse)
