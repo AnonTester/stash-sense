@@ -125,40 +125,62 @@ class TattooMatcher:
             return None
         return crop
 
-    def match(
+    def embed_detections(
         self,
         image: np.ndarray,
         detections: list,
-        k: int = 10,
-    ) -> dict[str, float]:
-        """Match tattoo crops against the index.
+    ) -> list[tuple[object, np.ndarray]]:
+        """Crop + embed each detection — the expensive, DB-independent half
+        of matching. Cacheable: the resulting embeddings are all
+        `match_from_embeddings` needs, so a caller can persist them once and
+        skip this step (and the frame pixels it needs) on future re-matches.
 
         Args:
             image: Full RGB image as numpy array (H, W, 3)
             detections: List of TattooDetection objects from TattooDetector
-            k: Number of nearest neighbors per crop
 
         Returns:
-            Dict mapping universal_id -> best similarity score (0-1, higher is better)
+            List of (detection, embedding) pairs. Detections whose crop or
+            embedding generation failed are silently omitted (matches the
+            original inline behavior).
         """
-        if not detections or self.tattoo_index is None:
-            return {}
-
-        scores_by_performer: dict[str, list[float]] = defaultdict(list)
-        mapping_size = len(self.tattoo_mapping)
-
+        results = []
         for detection in detections:
             crop = self.crop_tattoo(image, detection.bbox)
             if crop is None:
                 continue
-
             try:
                 embedding = self.generator.get_embedding(crop)
             except Exception as e:
                 logger.warning(f"Failed to generate tattoo embedding: {e}")
                 continue
+            results.append((detection, embedding))
+        return results
 
-            # Query Voyager index
+    def match_from_embeddings(
+        self,
+        embeddings: list[np.ndarray],
+        k: int = 10,
+    ) -> dict[str, float]:
+        """Match precomputed tattoo embeddings against the index — the
+        cheap, DB-dependent half. Safe to call repeatedly against a fresh
+        `tattoo_index`/`tattoo_mapping` (e.g. after a database update)
+        without redoing detection or embedding.
+
+        Args:
+            embeddings: Embedding vectors from embed_detections() (or cached)
+            k: Number of nearest neighbors per crop
+
+        Returns:
+            Dict mapping universal_id -> best similarity score (0-1, higher is better)
+        """
+        if not embeddings or self.tattoo_index is None:
+            return {}
+
+        scores_by_performer: dict[str, list[float]] = defaultdict(list)
+        mapping_size = len(self.tattoo_mapping)
+
+        for embedding in embeddings:
             try:
                 neighbors, distances = self.tattoo_index.query(embedding, k=k)
             except Exception as e:
@@ -181,6 +203,31 @@ class TattooMatcher:
 
         # Take best score per performer
         return {uid: max(scores) for uid, scores in scores_by_performer.items()}
+
+    def match(
+        self,
+        image: np.ndarray,
+        detections: list,
+        k: int = 10,
+    ) -> dict[str, float]:
+        """Match tattoo crops against the index (detect+embed+query in one
+        call — unchanged behavior/signature for existing callers). Split
+        into embed_detections()/match_from_embeddings() internally so a
+        caller that wants to cache the embeddings can call those directly
+        instead.
+
+        Args:
+            image: Full RGB image as numpy array (H, W, 3)
+            detections: List of TattooDetection objects from TattooDetector
+            k: Number of nearest neighbors per crop
+
+        Returns:
+            Dict mapping universal_id -> best similarity score (0-1, higher is better)
+        """
+        if not detections or self.tattoo_index is None:
+            return {}
+        embedded = self.embed_detections(image, detections)
+        return self.match_from_embeddings([e for _, e in embedded], k=k)
 
 
 class _TattooEmbeddingGenerator:

@@ -1,5 +1,21 @@
 ## 2026-08-15
 
+### 0.12.0
+- Feature: Scene fingerprinting now caches the raw face/body/tattoo signals
+  it extracts (FaceNet512/ArcFace vectors, MediaPipe body ratios,
+  EfficientNet-B0 tattoo embeddings) per scene, keyed by detection
+  parameters. A performer-database update no longer forces a full
+  re-extraction of every previously-fingerprinted scene: /identify/scene
+  now takes a fast path that reuses cached signals and only re-runs the
+  cheap DB-dependent matching/clustering/re-ranking step when the cache is
+  compatible (num_frames/min_face_size/min_face_confidence/offsets
+  unchanged), falling back to a full extraction otherwise. New
+  use_cache/used_cache request/response fields (default on).
+  TattooMatcher.match() split into embed_detections()/
+  match_from_embeddings() to support this, mirroring the pattern
+  recognize_face_v2 already used for faces. New scene_signal_cache/
+  scene_face_embeddings/scene_tattoo_embeddings tables (schema v12).
+
 ### 0.11.1
 - Fix: The underscore/dash word-wrap fix from 0.9.1/0.9.2 didn't cover the
   Duplicate Scenes recommendations detail view (a third renderer sharing

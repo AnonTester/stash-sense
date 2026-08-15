@@ -140,6 +140,82 @@ def save_scene_fingerprint(
         return None, error_msg
 
 
+# ==================== Scene signal cache ====================
+#
+# Caches the DB-independent, expensive part of scene analysis (frame
+# extraction + face/body/tattoo detection+embedding) separately from
+# scene_fingerprint_faces' match results, so a performer-database version
+# bump can redo just the cheap matching/re-ranking step instead of the
+# whole pipeline. See identification_router.py's /identify/scene.
+
+def get_scene_signal_cache(scene_id: int) -> Optional[dict]:
+    """Cached detection params + body/tattoo signal summary for a scene,
+    or None if this scene has never been analyzed."""
+    if rec_db is None:
+        return None
+    return rec_db.get_scene_signal_cache(scene_id)
+
+
+def is_scene_cache_compatible(
+    cache_meta: dict, num_frames: int, min_face_size: int, min_face_confidence: float,
+    start_offset_pct: float, end_offset_pct: float,
+) -> bool:
+    """Detection-affecting params must match for a cache to be reusable —
+    these determine which frames got sampled and which faces got detected
+    in the first place. Matching-time-only params (max_distance/top_k/
+    cluster_threshold/matching_mode) are deliberately not checked here:
+    they only affect how cached data gets matched/clustered, and the fast
+    path always redoes that step fresh against the current request/DB
+    regardless, so different values there don't invalidate the cache.
+    """
+    return (
+        cache_meta["num_frames"] == num_frames
+        and cache_meta["min_face_size"] == min_face_size
+        and abs(cache_meta["min_face_confidence"] - min_face_confidence) < 1e-6
+        and abs(cache_meta["start_offset_pct"] - start_offset_pct) < 1e-6
+        and abs(cache_meta["end_offset_pct"] - end_offset_pct) < 1e-6
+    )
+
+
+def save_scene_signal_cache(
+    scene_id: int, *, num_frames: int, min_face_size: int, min_face_confidence: float,
+    start_offset_pct: float, end_offset_pct: float, frames_analyzed: int,
+    body_ratios: Optional[dict] = None, tattoos_detected: int = 0,
+) -> None:
+    if rec_db is None:
+        return
+    rec_db.save_scene_signal_cache(
+        scene_id, num_frames=num_frames, min_face_size=min_face_size,
+        min_face_confidence=min_face_confidence, start_offset_pct=start_offset_pct,
+        end_offset_pct=end_offset_pct, frames_analyzed=frames_analyzed,
+        body_ratios=body_ratios, tattoos_detected=tattoos_detected,
+    )
+
+
+def save_face_signal_cache(scene_id: int, faces: list[dict]) -> None:
+    if rec_db is None:
+        return
+    rec_db.replace_face_embeddings(scene_id, faces)
+
+
+def load_face_signal_cache(scene_id: int) -> list[dict]:
+    if rec_db is None:
+        return []
+    return rec_db.get_face_embeddings(scene_id)
+
+
+def save_tattoo_signal_cache(scene_id: int, tattoos: list[dict]) -> None:
+    if rec_db is None:
+        return
+    rec_db.replace_tattoo_embeddings(scene_id, tattoos)
+
+
+def load_tattoo_signal_cache(scene_id: int) -> list[dict]:
+    if rec_db is None:
+        return []
+    return rec_db.get_tattoo_embeddings(scene_id)
+
+
 def save_image_fingerprint(
     image_id: str,
     gallery_id: Optional[str],

@@ -6,6 +6,7 @@ using face recognition with optional multi-signal matching (body, tattoo).
 
 import asyncio
 import base64
+import json
 import logging
 import os
 import time
@@ -13,18 +14,21 @@ from collections import defaultdict
 from typing import Optional
 
 import httpx
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import face_config
 from recognizer import FaceRecognizer, PerformerMatch, RecognitionResult
-from embeddings import load_image
+from embeddings import load_image, DetectedFace, FaceEmbedding
 from frame_extractor import (
     FrameExtractionConfig,
     extract_frames_from_stash_scene,
     check_ffmpeg_available,
 )
 from matching import MatchingConfig
+from body_proportions import BodyProportions
+from tattoo_detector import TattooDetection, TattooResult
 from scene_matcher import (
     _extract_scene_signals,
     _rerank_scene_persons,
@@ -36,7 +40,17 @@ from scene_matcher import (
     hybrid_matching,
 )
 from stashbox_utils import _get_stashbox_client, _extract_endpoint
-from recommendations_router import save_scene_fingerprint, save_image_fingerprint
+from recommendations_router import (
+    save_scene_fingerprint,
+    save_image_fingerprint,
+    get_scene_signal_cache,
+    is_scene_cache_compatible,
+    save_scene_signal_cache,
+    save_face_signal_cache,
+    load_face_signal_cache,
+    save_tattoo_signal_cache,
+    load_tattoo_signal_cache,
+)
 from database_updater import UpdateStatus
 
 logger = logging.getLogger(__name__)
@@ -221,6 +235,9 @@ class SceneIdentifyRequest(BaseModel):
     use_body: bool = True
     use_tattoo: bool = True
 
+    # Cache settings
+    use_cache: bool = Field(True, description="Reuse cached face/body/tattoo signals from a prior extraction on this scene when detection params match, skipping ffmpeg/detection/embedding and only redoing matching")
+
 
 class PersonResult(BaseModel):
     """A unique person detected across multiple frames."""
@@ -245,6 +262,7 @@ class SceneIdentifyResponse(BaseModel):
     fingerprint_error: Optional[str] = None
     timing: Optional[dict] = None
     multi_signal_used: bool = False
+    used_cache: bool = False
 
 
 # ==================== Helper Functions ====================
@@ -748,6 +766,198 @@ async def identify_gallery(request: GalleryIdentifyRequest, _=Depends(require_db
     )
 
 
+async def _identify_scene_from_cache(
+    request: "SceneIdentifyRequest",
+    cache_meta: dict,
+    t_start: float,
+) -> "SceneIdentifyResponse":
+    """Reconstruct matching inputs from cached face/body/tattoo signals and
+    rerun only the DB-dependent steps (matching, clustering, re-ranking).
+
+    Skips ffmpeg frame extraction, RetinaFace detection, FaceNet512/ArcFace
+    embedding, MediaPipe pose extraction, and YOLO tattoo detection entirely
+    -- all reused verbatim from a prior full run on this scene.
+    """
+    scene_id_int = int(request.scene_id)
+
+    match_config = MatchingConfig(
+        query_k=100,
+        facenet_weight=face_config.FACENET_WEIGHT,
+        arcface_weight=face_config.ARCFACE_WEIGHT,
+        max_results=request.top_k * 2,
+        max_distance=request.max_distance,
+    )
+
+    cached_faces = load_face_signal_cache(scene_id_int)
+    all_results: list[tuple[int, RecognitionResult]] = []
+    for row in cached_faces:
+        bbox = json.loads(row["bbox_json"])
+        face = DetectedFace(image=None, bbox=bbox, confidence=row["confidence"], yaw=row["yaw"])
+        embedding = FaceEmbedding(
+            facenet=np.frombuffer(row["facenet_vector"], dtype=np.float32),
+            arcface=np.frombuffer(row["arcface_vector"], dtype=np.float32),
+        )
+        matches, _match_result, _ = _recognizer.recognize_face_v2(face, match_config, embedding=embedding)
+        all_results.append((row["frame_index"], RecognitionResult(face=face, matches=matches, embedding=embedding)))
+
+    scene_all_matches = [m for _, r in all_results for m in r.matches]
+    await _fetch_missing_images(scene_all_matches)
+
+    # Multi-signal reconstruction, mirroring _extract_scene_signals' semantics:
+    # "body"/"tattoo" only join signals_used when a signal was actually found,
+    # not merely attempted.
+    scene_body_ratios = None
+    scene_tattoo_result = None
+    scene_tattoo_scores = None
+    scene_signals_used = ["face"]
+    scene_tattoos_detected = cache_meta["tattoos_detected"] or 0
+    ms_used = False
+
+    if request.use_multi_signal and _multi_signal_matcher is not None and all_results:
+        if request.use_body and cache_meta["body_shoulder_hip_ratio"] is not None:
+            scene_body_ratios = BodyProportions.from_dict({
+                "shoulder_hip_ratio": cache_meta["body_shoulder_hip_ratio"],
+                "leg_torso_ratio": cache_meta["body_leg_torso_ratio"],
+                "arm_span_height_ratio": cache_meta["body_arm_span_height_ratio"],
+                "confidence": cache_meta["body_confidence"],
+            })
+            scene_signals_used.append("body")
+
+        if request.use_tattoo:
+            # scene_tattoos_detected (raw YOLO count) can be >0 with no cached
+            # embedding rows -- e.g. no tattoo_matcher was available to embed
+            # against at cache-population time. Mirror _extract_scene_signals'
+            # semantics: "tattoo" joins signals_used whenever detections were
+            # found at all, independent of whether scoring embeddings exist.
+            cached_tattoos = load_tattoo_signal_cache(scene_id_int) if scene_tattoos_detected > 0 else []
+            if scene_tattoos_detected > 0:
+                if cached_tattoos:
+                    detections = [
+                        TattooDetection(
+                            bbox=json.loads(row["bbox_json"]),
+                            confidence=row["confidence"],
+                            location_hint=row["location_hint"],
+                        )
+                        for row in cached_tattoos
+                    ]
+                    scene_tattoo_result = TattooResult(
+                        detections=detections, has_tattoos=True,
+                        confidence=max(d.confidence for d in detections),
+                    )
+                    if _multi_signal_matcher.tattoo_matcher is not None:
+                        embeddings = [np.frombuffer(row["embedding"], dtype=np.float32) for row in cached_tattoos]
+                        scene_tattoo_scores = _multi_signal_matcher.tattoo_matcher.match_from_embeddings(embeddings)
+                else:
+                    scene_tattoo_result = TattooResult(detections=[], has_tattoos=True, confidence=0.0)
+                scene_signals_used.append("tattoo")
+            else:
+                scene_tattoo_result = TattooResult(detections=[], has_tattoos=False, confidence=0.0)
+
+        ms_used = len(scene_signals_used) > 1
+
+    t_match = time.time()
+    if request.matching_mode == "hybrid":
+        persons = hybrid_matching(
+            all_results, _recognizer,
+            cluster_threshold=request.cluster_threshold,
+            top_k=request.top_k * 2, max_distance=request.max_distance,
+        )
+    elif request.matching_mode == "frequency":
+        persons = clustered_frequency_matching(
+            all_results, _recognizer,
+            cluster_threshold=request.cluster_threshold,
+            top_k=request.top_k, max_distance=request.max_distance,
+            scene_performer_stashdb_ids=request.scene_performer_stashdb_ids,
+        )
+    else:
+        clusters = cluster_faces_by_person(all_results, _recognizer, distance_threshold=request.cluster_threshold)
+        clusters = merge_clusters_by_match(clusters)
+        persons = []
+        used_performers: set[str] = set()
+        all_persons = []
+        for person_id, cluster in enumerate(clusters):
+            aggregated_matches = aggregate_matches(cluster, top_k=request.top_k)
+            all_persons.append((len(cluster), PersonResult(
+                person_id=person_id, frame_count=len(cluster),
+                best_match=aggregated_matches[0] if aggregated_matches else None,
+                all_matches=aggregated_matches,
+            )))
+        all_persons.sort(key=lambda x: x[0], reverse=True)
+        for _, person in all_persons:
+            if person.best_match:
+                if person.best_match.stashdb_id in used_performers:
+                    for alt_match in person.all_matches[1:]:
+                        if alt_match.stashdb_id not in used_performers:
+                            person.best_match = alt_match
+                            used_performers.add(alt_match.stashdb_id)
+                            break
+                    else:
+                        person.best_match = None
+                else:
+                    used_performers.add(person.best_match.stashdb_id)
+            person.all_matches = [m for m in person.all_matches if m.stashdb_id not in used_performers or m.stashdb_id == (person.best_match.stashdb_id if person.best_match else None)]
+            persons.append(person)
+        for i, person in enumerate(persons):
+            person.person_id = i
+
+    if ms_used and _multi_signal_matcher is not None:
+        persons = _rerank_scene_persons(
+            persons=persons, matcher=_multi_signal_matcher,
+            body_ratios=scene_body_ratios, tattoo_result=scene_tattoo_result,
+            tattoo_scores=scene_tattoo_scores, signals_used=scene_signals_used,
+            tattoos_detected=scene_tattoos_detected,
+        )
+
+    top_names = [p.best_match.name for p in persons[:3] if p.best_match]
+    print(f"[identify_scene] [{time.time()-t_start:.1f}s] === DONE (cache) === Top matches: {', '.join(top_names)}")
+
+    fingerprint_saved = False
+    fingerprint_error = None
+    if persons:
+        performer_data = []
+        for person in persons:
+            if person.best_match:
+                avg_distance = person.best_match.distance
+                avg_confidence = max(0, 1 - avg_distance) if avg_distance is not None else None
+                performer_data.append({
+                    "performer_id": person.best_match.stashdb_id,
+                    "face_count": person.frame_count,
+                    "avg_confidence": avg_confidence,
+                })
+        if performer_data:
+            current_db_version = _db_manifest.get("version")
+            fp_id, fp_error = save_scene_fingerprint(
+                scene_id=scene_id_int,
+                frames_analyzed=cache_meta["frames_analyzed"],
+                performer_data=performer_data,
+                db_version=current_db_version,
+            )
+            if fp_id:
+                fingerprint_saved = True
+            else:
+                fingerprint_error = fp_error
+
+    timing_data = {
+        "total_ms": round((time.time() - t_start) * 1000),
+        "matching_ms": round((time.time() - t_match) * 1000),
+    }
+
+    return SceneIdentifyResponse(
+        scene_id=request.scene_id,
+        frames_analyzed=cache_meta["frames_analyzed"],
+        frames_requested=request.num_frames,
+        faces_detected=len(cached_faces),
+        faces_after_filter=len(cached_faces),
+        persons=persons,
+        errors=[],
+        fingerprint_saved=fingerprint_saved,
+        fingerprint_error=fingerprint_error,
+        timing=timing_data,
+        multi_signal_used=ms_used,
+        used_cache=True,
+    )
+
+
 @router.post("/identify/scene", response_model=SceneIdentifyResponse)
 async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_available)):
     """
@@ -758,14 +968,43 @@ async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_ava
     """
     t_start = time.time()
 
-    if not check_ffmpeg_available():
-        raise HTTPException(status_code=503, detail="ffmpeg not available")
-
     base_url = _stash_url.rstrip("/")
     api_key = _stash_api_key
 
     if not base_url:
         raise HTTPException(status_code=400, detail="STASH_URL env var not set")
+
+    # Resolve num_frames: use settings value when caller didn't override.
+    # Done up front so it's available for the cache-compatibility check below.
+    num_frames = request.num_frames
+    try:
+        from settings import get_setting
+        settings_num_frames = int(get_setting("num_frames"))
+        if num_frames == face_config.NUM_FRAMES:
+            num_frames = settings_num_frames
+    except (RuntimeError, KeyError):
+        pass
+
+    scene_id_int = int(request.scene_id)
+
+    if request.use_cache:
+        cache_meta = get_scene_signal_cache(scene_id_int)
+        if cache_meta is not None and is_scene_cache_compatible(
+            cache_meta,
+            num_frames=num_frames,
+            min_face_size=request.min_face_size,
+            min_face_confidence=request.min_face_confidence,
+            start_offset_pct=request.start_offset_pct,
+            end_offset_pct=request.end_offset_pct,
+        ):
+            print(f"[identify_scene] === START scene_id={request.scene_id} (cache hit) ===")
+            try:
+                return await _identify_scene_from_cache(request, cache_meta, t_start)
+            except Exception as e:
+                logger.warning(f"[identify_scene] Cache fast-path failed for scene {request.scene_id}, falling back to full pipeline: {e}")
+
+    if not check_ffmpeg_available():
+        raise HTTPException(status_code=503, detail="ffmpeg not available")
 
     print(f"[identify_scene] === START scene_id={request.scene_id} ===")
     print(f"[identify_scene] Settings: num_frames={request.num_frames}, min_face_size={request.min_face_size}, max_distance={request.max_distance}, mode={request.matching_mode}")
@@ -810,17 +1049,6 @@ async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_ava
 
     except httpx.HTTPError as e:
         raise HTTPException(status_code=400, detail=f"Failed to query scene: {e}")
-
-    # Resolve num_frames: use settings value when caller didn't override
-    num_frames = request.num_frames
-    try:
-        from settings import get_setting
-        settings_num_frames = int(get_setting("num_frames"))
-        # If request used the Pydantic default, prefer settings value
-        if num_frames == face_config.NUM_FRAMES:
-            num_frames = settings_num_frames
-    except (RuntimeError, KeyError):
-        pass
 
     # Resolve frame extraction concurrency from settings
     max_concurrent = 8
@@ -913,6 +1141,11 @@ async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_ava
     all_results: list[tuple[int, RecognitionResult]] = []
     t_recognize_total = 0.0
 
+    # Cache-ready rows for every face embedded so far -- expensive/DB-independent,
+    # persisted below (before matching-mode logic) so a future DB update can
+    # skip straight to re-matching without redoing detection+embedding.
+    face_cache_rows: list[dict] = []
+
     for (frame_idx, face), embedding in zip(detected_faces, embeddings):
         t_rec = time.time()
         matches, _match_result, _ = _recognizer.recognize_face_v2(face, match_config, embedding=embedding)
@@ -920,6 +1153,14 @@ async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_ava
 
         result = RecognitionResult(face=face, matches=matches, embedding=embedding)
         all_results.append((frame_idx, result))
+        face_cache_rows.append({
+            "frame_index": frame_idx,
+            "bbox": face.bbox,
+            "confidence": face.confidence,
+            "yaw": face.yaw,
+            "facenet_vector": embedding.facenet.astype(np.float32).tobytes(),
+            "arcface_vector": embedding.arcface.astype(np.float32).tobytes(),
+        })
 
     t_face_loop_total = time.time() - t_face_loop
     print(f"[identify_scene] [{time.time()-t_start:.1f}s] Matching: {t_recognize_total:.1f}s | Total face pipeline: {t_face_loop_total:.1f}s")
@@ -960,12 +1201,22 @@ async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_ava
                             matches, _, _ = _recognizer.recognize_face_v2(face, match_config, embedding=emb)
                             result = RecognitionResult(face=face, matches=matches, embedding=emb)
                             all_results.append((-1, result))
+                            face_cache_rows.append({
+                                "frame_index": -1,
+                                "bbox": face.bbox,
+                                "confidence": face.confidence,
+                                "yaw": face.yaw,
+                                "facenet_vector": emb.facenet.astype(np.float32).tobytes(),
+                                "arcface_vector": emb.arcface.astype(np.float32).tobytes(),
+                            })
                             screenshot_faces += 1
                             top_match = matches[0].name if matches else "no match"
                             print(f"[identify_scene] [{time.time()-t_start:.1f}s] Screenshot face: {face.bbox['w']}x{face.bbox['h']}px -> {top_match}")
                     print(f"[identify_scene] [{time.time()-t_start:.1f}s] Screenshot ({img_w}x{img_h}): {len(screenshot_detected)} faces, {screenshot_faces} usable")
         except Exception as e:
             print(f"[identify_scene] Screenshot processing failed: {e}")
+
+    save_face_signal_cache(scene_id_int, face_cache_rows)
 
     # Fetch missing images from StashBox for all detected matches
     scene_all_matches = [m for _, r in all_results for m in r.matches]
@@ -979,10 +1230,11 @@ async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_ava
     scene_tattoos_detected = 0
     ms_used = False
 
+    tattoo_cache_rows: list[dict] = []
     if (request.use_multi_signal and _multi_signal_matcher is not None
             and (request.use_body or request.use_tattoo) and detected_faces):
         t_ms = time.time()
-        scene_body_ratios, scene_tattoo_result, scene_tattoo_scores, scene_signals_used, scene_tattoos_detected = _extract_scene_signals(
+        scene_body_ratios, scene_tattoo_result, scene_tattoo_scores, scene_signals_used, scene_tattoos_detected, tattoo_cache_rows = _extract_scene_signals(
             frames=extraction_result.frames,
             detected_faces=detected_faces,
             matcher=_multi_signal_matcher,
@@ -991,6 +1243,19 @@ async def identify_scene(request: SceneIdentifyRequest, _=Depends(require_db_ava
         )
         ms_used = len(scene_signals_used) > 1
         print(f"[identify_scene] [{time.time()-t_start:.1f}s] Multi-signal: signals={scene_signals_used}, tattoos_detected={scene_tattoos_detected} in {time.time()-t_ms:.1f}s")
+
+    save_scene_signal_cache(
+        scene_id_int,
+        num_frames=num_frames,
+        min_face_size=request.min_face_size,
+        min_face_confidence=request.min_face_confidence,
+        start_offset_pct=request.start_offset_pct,
+        end_offset_pct=request.end_offset_pct,
+        frames_analyzed=len(extraction_result.frames),
+        body_ratios=scene_body_ratios.to_dict() if scene_body_ratios else None,
+        tattoos_detected=scene_tattoos_detected,
+    )
+    save_tattoo_signal_cache(scene_id_int, tattoo_cache_rows)
 
     # Choose matching mode
     t_match_end = 0.0

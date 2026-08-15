@@ -35,7 +35,11 @@ def _extract_scene_signals(
         use_tattoo: Whether to run tattoo detection
 
     Returns:
-        (body_ratios, tattoo_result, tattoo_scores, signals_used, tattoos_detected)
+        (body_ratios, tattoo_result, tattoo_scores, signals_used, tattoos_detected, tattoo_cache_rows)
+        tattoo_cache_rows: list of dicts (frame_index, bbox, location_hint,
+        confidence, embedding) ready for recommendations_router's
+        save_tattoo_signal_cache — ready-to-cache embeddings so a future
+        performer-DB refresh can re-match without re-detecting.
     """
     from tattoo_detector import TattooResult
 
@@ -44,6 +48,7 @@ def _extract_scene_signals(
     tattoo_scores = None
     signals_used = ["face"]
     tattoos_detected = 0
+    tattoo_cache_rows: list[dict] = []
 
     # Build frame index -> image lookup
     frame_map = {f.frame_index: f.image for f in frames}
@@ -74,21 +79,31 @@ def _extract_scene_signals(
         # Pick top 3 frames
         top_frame_idxs = sorted(frame_scores, key=frame_scores.get, reverse=True)[:3]
 
-        # Merge detections across frames
+        # Merge detections across frames, embedding each one as we go (not
+        # just the single best-detection-count frame as before) — more
+        # matching evidence, and every detection ends up with an embedding
+        # so the cache has no partial-coverage rows to special-case.
         all_detections = []
-        best_frame_for_matching = None
-        best_frame_detection_count = 0
+        embedded: list[tuple["TattooDetection", "np.ndarray"]] = []
 
         for frame_idx in top_frame_idxs:
             if frame_idx not in frame_map:
                 continue
             frame_img = frame_map[frame_idx]
             result = matcher.tattoo_detector.detect(frame_img)
-            if result.has_tattoos:
-                all_detections.extend(result.detections)
-                if len(result.detections) > best_frame_detection_count:
-                    best_frame_detection_count = len(result.detections)
-                    best_frame_for_matching = (frame_img, result)
+            if not result.has_tattoos:
+                continue
+            all_detections.extend(result.detections)
+            if matcher.tattoo_matcher is not None:
+                for detection, embedding in matcher.tattoo_matcher.embed_detections(frame_img, result.detections):
+                    embedded.append((detection, embedding))
+                    tattoo_cache_rows.append({
+                        "frame_index": frame_idx,
+                        "bbox": detection.bbox,
+                        "location_hint": detection.location_hint,
+                        "confidence": detection.confidence,
+                        "embedding": embedding.astype(np.float32).tobytes(),
+                    })
 
         tattoos_detected = len(all_detections)
 
@@ -101,19 +116,15 @@ def _extract_scene_signals(
             )
             signals_used.append("tattoo")
 
-            # Run embedding matching on the frame with the most detections
-            if matcher.tattoo_matcher is not None and best_frame_for_matching:
-                frame_img, frame_result = best_frame_for_matching
-                tattoo_scores = matcher.tattoo_matcher.match(
-                    frame_img, frame_result.detections
-                )
+            if embedded:
+                tattoo_scores = matcher.tattoo_matcher.match_from_embeddings([e for _, e in embedded])
         else:
             # No tattoos detected -- still useful signal (absence)
             tattoo_result = TattooResult(
                 detections=[], has_tattoos=False, confidence=0.0,
             )
 
-    return body_ratios, tattoo_result, tattoo_scores, signals_used, tattoos_detected
+    return body_ratios, tattoo_result, tattoo_scores, signals_used, tattoos_detected, tattoo_cache_rows
 
 
 def _rerank_scene_persons(
