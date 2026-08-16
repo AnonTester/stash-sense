@@ -14,6 +14,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 import httpx
 import numpy as np
@@ -109,6 +110,22 @@ def _image_fingerprint(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:16]
 
 
+def _relative_image_url(image_path: str) -> str:
+    """Strip scheme+host from Stash's image_path, keeping only path+query.
+
+    image_path comes back absolute (e.g. "http://192.168.1.2:9997/performer/5/image?t=...")
+    because that's the host the sidecar itself uses to reach Stash. The
+    browser rendering match results may be reaching this same Stash
+    instance through a completely different address (a domain name, a
+    reverse proxy, a VPN/tailnet IP) -- shipping the sidecar's own
+    internal address to the browser would load (or fail to load) the
+    image from the wrong place. A root-relative URL resolves against
+    whatever origin the browser is actually using, same as how Stash's
+    own web UI references its images."""
+    parsed = urlsplit(image_path)
+    return parsed.path + (f"?{parsed.query}" if parsed.query else "")
+
+
 async def sync_one_performer(
     stash, generator, index: "LocalPerformerIndex", performer_id: int, event_type: str,
 ) -> str:
@@ -174,7 +191,7 @@ async def sync_one_performer(
         name=performer["name"],
         stashdb_id=stashdb_id,
         image_hash=fingerprint,
-        image_url=image_path,
+        image_url=_relative_image_url(image_path),
         facenet_vector=embedding.facenet,
         arcface_vector=embedding.arcface,
     )

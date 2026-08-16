@@ -304,6 +304,9 @@
 
 /* Links */
 .ss-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   margin-bottom: 12px;
 }
 
