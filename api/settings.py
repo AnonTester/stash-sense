@@ -54,8 +54,9 @@ CATEGORIES = {
     "rate_limits": {"label": "Rate Limits", "order": 1},
     "recognition": {"label": "Recognition", "order": 2},
     "signals": {"label": "Signals", "order": 3},
-    "upstream_sync": {"label": "Upstream Sync", "order": 4},
-    "diagnostics": {"label": "Diagnostics", "order": 5},
+    "local_performers": {"label": "Local Performers", "order": 4},
+    "upstream_sync": {"label": "Upstream Sync", "order": 5},
+    "diagnostics": {"label": "Diagnostics", "order": 6},
 }
 
 
@@ -118,6 +119,14 @@ _define("body_signal_enabled", "Body Proportions",
 _define("tattoo_signal_enabled", "Tattoo Detection",
         "Use tattoo detection as a supplementary identification signal (requires model)",
         "signals", SettingType.BOOL, fallback=False)
+
+# -- Local Performers --
+_define("local_performer_auto_sync_enabled", "Auto-Sync on Performer Changes",
+        "Automatically update the local performer index in the background whenever a "
+        "performer is added, edited, or removed in this Stash instance (via a plugin "
+        "hook). Falls back to the scheduled/manual Local Performer Sync task if the "
+        "sidecar is unreachable when a change happens.",
+        "local_performers", SettingType.BOOL, fallback=False)
 
 # -- Upstream Sync --
 _define("upstream_scene_gender_female_enabled", "Female",

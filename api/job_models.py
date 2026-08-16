@@ -282,3 +282,14 @@ _register(
     default_interval_hours=24,
     allowed_intervals=INTERVALS_FREQUENT,
 )
+
+_register(
+    "local_performer_sync",
+    "Local Performer Sync",
+    "Builds/updates the local performer index from this Stash instance's own performer cover images",
+    ResourceType.GPU,
+    JobPriority.LOW,
+    supports_incremental=True,
+    schedulable=True,
+    allowed_intervals=INTERVALS_INFREQUENT,
+)

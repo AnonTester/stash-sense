@@ -27,6 +27,11 @@ class PerformerMatch:
     facenet_distance: float
     arcface_distance: float
     combined_score: float  # Lower is better (average of distances)
+    # Set only for local-index matches (universal_id starts with "local:"),
+    # to the local Stash performer id -- unambiguous even when stashdb_id
+    # above is a real linked StashDB uuid rather than the local id itself,
+    # so callers never have to guess which one stashdb_id actually holds.
+    local_performer_id: Optional[str] = None
 
 
 @dataclass
@@ -93,6 +98,20 @@ class FaceRecognizer:
                 self.tattoo_mapping = json.load(f)  # index -> universal_id
             print(f"Tattoo embeddings loaded: {len(self.tattoo_index)} vectors, "
                   f"{len(self.tattoo_mapping)} mappings")
+
+        # Optionally load the local performer index -- built from this
+        # Stash instance's own performer cover images by the
+        # local_performer_sync job, absent until that's run at least once.
+        self.local_performer_index = None
+        if db_config.local_faces_json_path and db_config.local_faces_json_path.exists():
+            from local_performer_index import LocalPerformerIndex
+            print(f"Loading local performer index from {db_config.local_faces_json_path}...")
+            self.local_performer_index = LocalPerformerIndex(
+                db_config.local_facenet_index_path,
+                db_config.local_arcface_index_path,
+                db_config.local_faces_json_path,
+            )
+            print(f"Local performer index loaded: {len(self.local_performer_index)} performers")
 
         # Initialize SQLite database reader for multi-signal data
         self.db_reader = None
@@ -229,6 +248,7 @@ class FaceRecognizer:
             embedding = self.generator.get_embedding(face.image)
 
         # Use new matching logic
+        local_index = self.local_performer_index
         result = match_face(
             facenet_embedding=embedding.facenet,
             arcface_embedding=embedding.arcface,
@@ -237,21 +257,44 @@ class FaceRecognizer:
             faces_mapping=self.faces,
             performers=self.performers,
             config=config,
+            local_facenet_index=local_index.facenet_index if local_index else None,
+            local_arcface_index=local_index.arcface_index if local_index else None,
+            local_performers_mapping=local_index.mapping if local_index else None,
         )
 
         # Convert to PerformerMatch format for compatibility
         matches = []
         for candidate in result.matches:
-            stashdb_id = candidate.universal_id.split(":", 1)[1] if ":" in candidate.universal_id else candidate.universal_id
+            id_part = candidate.universal_id.split(":", 1)[1] if ":" in candidate.universal_id else candidate.universal_id
+
+            if candidate.universal_id.startswith("local:"):
+                # Local-index match: id_part is the local Stash performer
+                # id, not a StashDB uuid. Use the real linked stashdb_id if
+                # this performer has one (so "already tagged" checks and
+                # StashBox linking still work for them), otherwise fall
+                # back to the local id as the identifier.
+                local_info = (self.local_performer_index.mapping.get(id_part, {})
+                              if self.local_performer_index else {})
+                stashdb_id = local_info.get("stashdb_id") or id_part
+                country = None
+                image_url = local_info.get("image_url")
+                local_performer_id = id_part
+            else:
+                stashdb_id = id_part
+                country = self.performers.get(candidate.universal_id, {}).get("country")
+                image_url = self.performers.get(candidate.universal_id, {}).get("image_url")
+                local_performer_id = None
+
             matches.append(PerformerMatch(
                 universal_id=candidate.universal_id,
                 stashdb_id=stashdb_id,
                 name=candidate.name,
-                country=self.performers.get(candidate.universal_id, {}).get("country"),
-                image_url=self.performers.get(candidate.universal_id, {}).get("image_url"),
+                country=country,
+                image_url=image_url,
                 facenet_distance=candidate.facenet_distance or 0.0,
                 arcface_distance=candidate.arcface_distance or 0.0,
                 combined_score=candidate.combined_distance,
+                local_performer_id=local_performer_id,
             ))
 
         return matches, result, embedding

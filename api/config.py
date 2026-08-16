@@ -70,6 +70,13 @@ class DatabaseConfig:
     tattoo_index_path: Path = None
     tattoo_json_path: Path = None
 
+    # Local performer index (built from this Stash instance's own performer
+    # cover images, kept alongside the main StashDB-derived index -- see
+    # local_performer_index.py). Optional, same as the tattoo index above.
+    local_facenet_index_path: Path = None
+    local_arcface_index_path: Path = None
+    local_faces_json_path: Path = None
+
     # Metadata files (SQLite is primary, JSON kept for compatibility)
     sqlite_db_path: Path = None
     faces_json_path: Path = None
@@ -85,6 +92,9 @@ class DatabaseConfig:
         self.adaface_index_path = self.adaface_index_path or self.data_dir / "face_adaface.voy"
         self.tattoo_index_path = self.tattoo_index_path or self.data_dir / "tattoo_embeddings.voy"
         self.tattoo_json_path = self.tattoo_json_path or self.data_dir / "tattoo_embeddings.json"
+        self.local_facenet_index_path = self.local_facenet_index_path or self.data_dir / "local_facenet.voy"
+        self.local_arcface_index_path = self.local_arcface_index_path or self.data_dir / "local_arcface.voy"
+        self.local_faces_json_path = self.local_faces_json_path or self.data_dir / "local_faces.json"
         self.sqlite_db_path = self.sqlite_db_path or self.data_dir / "performers.db"
         self.faces_json_path = self.faces_json_path or self.data_dir / "faces.json"
         self.performers_json_path = self.performers_json_path or self.data_dir / "performers.json"

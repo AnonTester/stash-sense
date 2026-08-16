@@ -4,6 +4,7 @@
 Proxies requests to the Stash Sense sidecar API to bypass browser CSP restrictions.
 """
 import json
+import os
 import sys
 import requests
 
@@ -15,6 +16,16 @@ def main():
 
     # Get operation mode and args
     args = input_data.get("args", {})
+
+    # A hook invocation (Performer.Create/Update/Destroy.Post) has a
+    # different shape than a normal task/UI call: hookContext is present
+    # and there's no mode or JS-injected sidecar_url, since Stash calls
+    # the exec directly rather than going through our JS.
+    if "hookContext" in args:
+        handle_performer_hook(input_data)
+        print(json.dumps({"output": "ok"}))
+        return
+
     mode = args.get("mode", "")
 
 
@@ -100,6 +111,162 @@ def _log_prefix(level_char):
 def log(message):
     """Log an info message to Stash."""
     print(_log_prefix(b'i') + f"[Stash Sense] {message}\n", file=sys.stderr, flush=True)
+
+
+# ==================== Performer hook (local performer index sync) ====================
+#
+# Keeps the local performer identification index in sync with performer
+# create/update/destroy in this Stash instance. Must never block or fail
+# the user's actual Stash action just because the sidecar is unreachable --
+# failures are queued to a local retry-cache file and flushed opportunistically
+# on a later successful hook call.
+
+PLUGIN_ID = "stash-sense"
+PENDING_SYNC_FILENAME = "pending_local_sync.json"
+HOOK_SYNC_TIMEOUT = 3
+HOOK_FLUSH_LIMIT = 20
+
+
+def handle_performer_hook(input_data):
+    """Handle a Performer.Create/Update/Destroy.Post hook by syncing the
+    affected performer into the local identification index."""
+    hook_context = input_data.get("args", {}).get("hookContext", {})
+    performer_id = hook_context.get("id")
+    hook_type = hook_context.get("type", "")
+    if performer_id is None:
+        return
+    event_type = _hook_event_type(hook_type)
+
+    server = input_data.get("server_connection", {})
+    pending_path = os.path.join(server.get("PluginDir", "."), PENDING_SYNC_FILENAME)
+
+    sidecar_url = _get_sidecar_url(server)
+    if not sidecar_url:
+        _append_pending_sync(pending_path, performer_id, event_type)
+        log("Local performer sync hook: could not resolve sidecar URL, queued for retry")
+        return
+
+    setting = sidecar_get(
+        sidecar_url, "/settings/local_performer_auto_sync_enabled", timeout=HOOK_SYNC_TIMEOUT,
+    )
+    if "error" in setting:
+        _append_pending_sync(pending_path, performer_id, event_type)
+        log(f"Local performer sync hook: sidecar unreachable, queued performer {performer_id} for retry")
+        return
+    if not setting.get("value"):
+        return  # auto-sync disabled -- nothing to do, nothing to cache
+
+    result = sidecar_post(
+        sidecar_url, "/recommendations/local-performers/sync-one",
+        {"performer_id": int(performer_id), "event_type": event_type},
+        timeout=HOOK_SYNC_TIMEOUT,
+    )
+    if "error" in result:
+        _append_pending_sync(pending_path, performer_id, event_type)
+        log(f"Local performer sync hook: sync failed for performer {performer_id} ({result['error']}), queued for retry")
+        return
+
+    log(f"Local performer sync hook: performer {performer_id} -> {result.get('status')}")
+    _flush_pending_sync(sidecar_url, pending_path, skip_performer_id=str(performer_id))
+
+
+def _hook_event_type(hook_type):
+    if "Destroy" in hook_type:
+        return "destroy"
+    if "Create" in hook_type:
+        return "create"
+    return "update"
+
+
+def _get_sidecar_url(server):
+    """Resolve the configured sidecar URL via Stash's own GraphQL API.
+    A hook invocation has no JS-injected args (unlike normal task/UI
+    calls, where our JS reads settings in the browser and passes
+    sidecar_url along) -- Stash calls this exec directly with only
+    hookContext + server_connection on stdin."""
+    try:
+        port = str(server.get("Port"))
+        scheme = server.get("Scheme", "http")
+        host = server.get("Host") or "localhost"
+        if host == "0.0.0.0":
+            host = "localhost"
+        cookies = {}
+        session_cookie = server.get("SessionCookie")
+        if session_cookie and session_cookie.get("Value"):
+            cookies["session"] = session_cookie["Value"]
+        response = requests.post(
+            f"{scheme}://{host}:{port}/graphql",
+            json={"query": "query { configuration { plugins } }"},
+            cookies=cookies,
+            timeout=HOOK_SYNC_TIMEOUT,
+        )
+        response.raise_for_status()
+        plugins = response.json().get("data", {}).get("configuration", {}).get("plugins", {})
+        return (plugins.get(PLUGIN_ID) or {}).get("sidecarUrl")
+    except Exception as e:
+        log(f"Local performer sync hook: failed to resolve sidecar URL: {e}")
+        return None
+
+
+def _load_pending_sync(pending_path):
+    if not os.path.exists(pending_path):
+        return {}
+    try:
+        with open(pending_path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_pending_sync(pending_path, pending):
+    try:
+        with open(pending_path, "w") as f:
+            json.dump(pending, f)
+    except OSError as e:
+        log(f"Local performer sync hook: failed to write retry cache: {e}")
+
+
+def _append_pending_sync(pending_path, performer_id, event_type):
+    pending = _load_pending_sync(pending_path)
+    pending[str(performer_id)] = event_type
+    _write_pending_sync(pending_path, pending)
+
+
+def _flush_pending_sync(sidecar_url, pending_path, skip_performer_id=None):
+    """Best-effort flush of previously-failed syncs, piggybacking on this
+    successful hook call. Capped per call so a large backlog doesn't turn
+    one hook invocation into a slow bulk sync -- any remainder just stays
+    cached for the next successful hook (or the manual/scheduled full
+    sync task, the reliable fallback path)."""
+    pending = _load_pending_sync(pending_path)
+    had_skip_entry = str(skip_performer_id) in pending
+    pending.pop(str(skip_performer_id), None)
+    if not pending:
+        # Nothing left to retry -- but if removing the current event's own
+        # (now-redundant) entry emptied the cache, persist that. Otherwise
+        # the stale file would linger forever, since nothing else here
+        # writes it back.
+        if had_skip_entry:
+            _write_pending_sync(pending_path, {})
+        return
+
+    remaining = dict(pending)
+    for performer_id, event_type in list(pending.items())[:HOOK_FLUSH_LIMIT]:
+        result = sidecar_post(
+            sidecar_url, "/recommendations/local-performers/sync-one",
+            {"performer_id": int(performer_id), "event_type": event_type},
+            timeout=HOOK_SYNC_TIMEOUT,
+        )
+        if "error" not in result:
+            remaining.pop(performer_id, None)
+        else:
+            break  # sidecar likely down again -- stop, leave the rest cached
+
+    _write_pending_sync(pending_path, remaining)
+
+    flushed = len(pending) - len(remaining)
+    if flushed:
+        log(f"Local performer sync hook: flushed {flushed} pending sync(s) from retry cache")
 
 
 def health_check(sidecar_url):

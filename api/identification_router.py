@@ -131,8 +131,9 @@ class PerformerMatchResponse(BaseModel):
     arcface_distance: float
     country: Optional[str] = None
     image_url: Optional[str] = Field(None, description="StashDB profile image URL")
-    endpoint: Optional[str] = Field(None, description="StashBox endpoint domain (e.g. 'stashdb.org')")
+    endpoint: Optional[str] = Field(None, description="StashBox endpoint domain (e.g. 'stashdb.org'), or 'local' for a local-library match")
     already_tagged: bool = Field(False, description="Whether this performer is already tagged on the scene")
+    local_performer_id: Optional[str] = Field(None, description="Local Stash performer id, set only for local-index matches")
 
 
 class FaceResult(BaseModel):
@@ -182,6 +183,7 @@ class GalleryPerformerResult(BaseModel):
     country: Optional[str] = None
     image_url: Optional[str] = Field(None, description="StashDB profile image URL")
     endpoint: Optional[str] = Field(None, description="StashBox endpoint domain")
+    local_performer_id: Optional[str] = Field(None, description="Local Stash performer id, set only for local-index matches")
 
 
 class GalleryIdentifyRequest(BaseModel):
@@ -320,6 +322,7 @@ def _match_to_response(m, **overrides) -> PerformerMatchResponse:
         country=m.country,
         image_url=m.image_url,
         endpoint=_extract_endpoint(uid) or getattr(m, "endpoint", None),
+        local_performer_id=getattr(m, "local_performer_id", None),
     )
     defaults.update(overrides)
     return PerformerMatchResponse(**defaults)
@@ -751,6 +754,7 @@ async def identify_gallery(request: GalleryIdentifyRequest, _=Depends(require_db
                                 "country": best.country,
                                 "image_url": best.image_url,
                                 "endpoint": _extract_endpoint(best.universal_id),
+                                "local_performer_id": getattr(best, "local_performer_id", None),
                             }
 
                 if (i + 1) % 10 == 0:
@@ -785,6 +789,7 @@ async def identify_gallery(request: GalleryIdentifyRequest, _=Depends(require_db
             country=info.get("country"),
             image_url=info.get("image_url"),
             endpoint=info.get("endpoint"),
+            local_performer_id=info.get("local_performer_id"),
         ))
 
     # Sort by image count desc, then best distance asc

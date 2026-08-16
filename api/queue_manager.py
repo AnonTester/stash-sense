@@ -305,6 +305,7 @@ class QueueManager:
         from jobs.analysis_jobs import AnalysisJob
         from jobs.fingerprint_job import FingerprintGenerationJob
         from jobs.database_update_job import DatabaseUpdateJob
+        from jobs.local_performer_sync_job import LocalPerformerSyncJob
         from job_models import JOB_REGISTRY
 
         if type_id not in JOB_REGISTRY:
@@ -314,6 +315,8 @@ class QueueManager:
             return FingerprintGenerationJob()
         if type_id == "database_update":
             return DatabaseUpdateJob()
+        if type_id == "local_performer_sync":
+            return LocalPerformerSyncJob()
         return AnalysisJob(type_id)
 
     def _check_schedules(self):

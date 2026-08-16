@@ -1588,6 +1588,61 @@ async def mark_all_fingerprints_for_refresh(confirm: bool = False):
     }
 
 
+# ==================== Local Performer Database ====================
+#
+# No dedicated "sync-all" endpoint here -- a full sync is just the
+# "local_performer_sync" job type (registered in job_models.py), started
+# the same generic way every other Quick Action/Settings-triggered job is:
+# the plugin JS calls queue_submit({type: "local_performer_sync"}), same
+# pattern as fingerprint generation's Settings-tab "Start Fingerprinting"
+# button. Only the single-performer hook path below needs a bespoke
+# endpoint, since it's a fast synchronous operation, not a queued job.
+
+
+class LocalPerformerSyncOneRequest(BaseModel):
+    """Request from the Stash performer create/update/destroy hook to sync
+    a single performer into the local index. Deliberately synchronous
+    (not queued) so the caller can rely on a short, bounded turnaround."""
+    performer_id: int
+    event_type: str  # "create" | "update" | "destroy"
+
+
+@router.post("/local-performers/sync-one")
+async def sync_one_local_performer(request: LocalPerformerSyncOneRequest):
+    """Fast single-performer sync for the hook handler. Runs inline
+    (embeds one image at most) rather than going through the job queue,
+    since the caller (a Stash plugin hook) expects a quick response and
+    has its own local retry-cache for when this endpoint is unreachable."""
+    from config import DatabaseConfig
+    from embeddings import FaceEmbeddingGenerator
+    from local_performer_index import LocalPerformerIndex, sync_one_performer
+    import os
+    from pathlib import Path
+
+    stash = get_stash_client()
+    db_config = DatabaseConfig(data_dir=Path(os.environ.get("DATA_DIR", "./data")))
+    index = LocalPerformerIndex(
+        db_config.local_facenet_index_path,
+        db_config.local_arcface_index_path,
+        db_config.local_faces_json_path,
+    )
+    generator = FaceEmbeddingGenerator()
+
+    status = await sync_one_performer(
+        stash, generator, index, request.performer_id, request.event_type,
+    )
+    index.save()
+
+    if status in ("added", "updated", "removed"):
+        try:
+            from resource_manager import get_resource_manager
+            get_resource_manager().unload("face_recognition")
+        except (RuntimeError, KeyError):
+            pass  # not initialized / not currently loaded -- nothing to unload
+
+    return {"performer_id": request.performer_id, "status": status}
+
+
 # ==================== Upstream Sync Actions ====================
 
 

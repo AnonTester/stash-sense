@@ -1,5 +1,56 @@
 ## 2026-08-16
 
+### 0.12.14
+- Fix: The local performer sync's retry-cache file (used when the hook
+  fires while the sidecar is unreachable) never cleared itself once the
+  only cached entry belonged to the same performer the current hook call
+  was already syncing -- the flush logic removed it from memory but
+  returned before writing the change back to disk, so the file stayed
+  stuck showing a stale pending entry forever. Confirmed live: stopped
+  the sidecar, triggered a hook (entry cached), restarted, triggered the
+  same performer again -- the cache now correctly clears to {}.
+
+### 0.12.13
+- Fix: Local performer sync detected "did this image change" by hashing
+  the image URL, which includes a cache-busting timestamp Stash bumps on
+  *any* performer field edit -- not just an image swap. This meant every
+  unrelated metadata edit (renaming a performer, toggling favorite, etc)
+  with auto-sync enabled re-fetched and re-embedded that performer's
+  image for no reason. Now hashes the fetched image bytes instead, so
+  only an actual cover change triggers re-embedding.
+
+### 0.12.12
+- Fix: Local performer sync misclassified every performer without a
+  custom cover photo as a failure ("cannot identify image file") instead
+  of the intended "no usable image yet" outcome, since Stash's own
+  placeholder avatar isn't a decodable image. Detected via the URL's
+  default=true marker instead of attempting to decode it. Confirmed live
+  against the full local performer library: 52 of 1461 performers were
+  affected, now correctly classified with 0 errors.
+- Improvement: The sync job's result summary now reports a failed-to-
+  fetch/decode count when genuine errors occur, instead of silently
+  omitting them from the numbers shown in Operations history.
+
+### 0.12.11
+- Feature: Local performer database for identification. Builds a second,
+  much smaller face index from this Stash instance's own performer cover
+  images (Operations tab: "Local Performer Sync", or scheduled), queried
+  alongside the main StashDB-derived database during identification.
+  Local matches get a distance boost (a face in your own library is more
+  likely to be a performer you've already added than a random database
+  entry) and render with a "Local Library" indicator and a direct "Add to
+  Scene" action, skipping the StashBox lookup/create flow entirely since
+  the performer already exists locally. A performer linked to both the
+  local library and the main database surfaces both matches independently
+  -- two corroborating signals, which is the intended behavior.
+- Feature: Optional auto-sync via a new Performer Create/Update/Destroy
+  hook (Settings > Local Performers, off by default) keeps the local
+  index current in the background as performers are added, edited,
+  merged, or removed -- no need to wait for the next scheduled/manual
+  sync. If the sidecar is unreachable when a change happens, the affected
+  performer id is queued to a local retry-cache file and flushed
+  automatically on the next successful hook call, so no update is lost.
+
 ### 0.12.10
 - Fix: The CPU hardware tier also defaulted Frames Per Scene to 30 instead
   of the 60 used by the GPU tiers -- same class of bug as 0.12.8's

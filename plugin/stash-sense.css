@@ -391,6 +391,15 @@
   margin-left: 4px;
 }
 
+.ss-badge-local {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--bs-info, #17a2b8);
+  border: 1px solid var(--bs-info, #17a2b8);
+  border-radius: 3px;
+  padding: 1px 6px;
+}
+
 /* Single-frame detections section */
 .ss-singleton-section {
   margin-top: 16px;

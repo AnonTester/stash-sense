@@ -6,6 +6,7 @@ Implements intelligent matching that:
 3. Uses adaptive weighted fusion based on model reliability
 4. Returns matches with confidence scores
 """
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -14,6 +15,8 @@ import numpy as np
 from voyager import Index
 
 import face_config
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -320,6 +323,77 @@ def fuse_results(
     )
 
 
+# Score multiplier applied to local-index matches' combined_distance before
+# they're merged into the main results (lower distance = better, so < 1.0
+# is a boost). A face appearing in the user's own library is more likely to
+# be a performer they've already added locally than a random main-DB
+# entry. Deliberately a single tunable constant for now -- calibration is
+# expected to happen later against real results, not during this build.
+LOCAL_MATCH_BOOST = 0.85
+
+
+def fuse_local_results(
+    facenet_result: ModelQueryResult,
+    arcface_result: ModelQueryResult,
+    local_performers_mapping: dict[str, dict],  # str(performer_id) -> {name, stashdb_id, image_url, ...}
+    config: MatchingConfig = DEFAULT_CONFIG,
+) -> list[CandidateMatch]:
+    """Fuse local-performer-index query results into CandidateMatch objects.
+
+    Mirrors fuse_results()'s per-model merge, but against a completely
+    separate id space (Stash performer id, not a shared face index shared
+    with the main database) -- it can't be merged into the same candidates
+    dict as fuse_results(), and doesn't need the adaptive
+    healthy/degenerate model-health fallback that exists there (that
+    complexity was needed for the large main index; the local index is a
+    small supplementary boost signal, not the primary match source).
+    Every candidate gets tagged with a "local:" universal_id prefix
+    (mirroring the existing "stashdb.org:" convention -- see
+    stashbox_utils._extract_endpoint, which will naturally read this as
+    endpoint "local") and scored down by LOCAL_MATCH_BOOST.
+    """
+    candidates: dict[str, CandidateMatch] = {}
+
+    def _process(result: ModelQueryResult, is_facenet: bool) -> None:
+        for rank, (pid, dist) in enumerate(zip(result.neighbors, result.distances)):
+            pid_str = str(int(pid))
+            info = local_performers_mapping.get(pid_str)
+            if info is None:
+                continue  # stale entry (deleted since the index was last saved)
+            uid = f"local:{pid_str}"
+            if uid not in candidates:
+                candidates[uid] = CandidateMatch(
+                    face_index=int(pid), universal_id=uid, name=info.get("name", "Unknown"),
+                )
+            if is_facenet:
+                candidates[uid].facenet_distance = float(dist)
+                candidates[uid].facenet_rank = rank + 1
+                candidates[uid].in_facenet = True
+            else:
+                candidates[uid].arcface_distance = float(dist)
+                candidates[uid].arcface_rank = rank + 1
+                candidates[uid].in_arcface = True
+
+    _process(facenet_result, True)
+    _process(arcface_result, False)
+
+    for candidate in candidates.values():
+        fn_dist = candidate.facenet_distance
+        af_dist = candidate.arcface_distance
+        if fn_dist is not None and af_dist is not None:
+            combined = fn_dist * config.facenet_weight + af_dist * config.arcface_weight
+        elif fn_dist is not None:
+            combined = fn_dist
+        elif af_dist is not None:
+            combined = af_dist
+        else:
+            continue
+        candidate.combined_distance = combined * LOCAL_MATCH_BOOST
+        candidate.confidence = max(0.0, min(1.0, 1.0 - candidate.combined_distance))
+
+    return list(candidates.values())
+
+
 def match_face(
     facenet_embedding: np.ndarray,
     arcface_embedding: np.ndarray,
@@ -328,6 +402,9 @@ def match_face(
     faces_mapping: list[str],
     performers: dict[str, dict],
     config: MatchingConfig = DEFAULT_CONFIG,
+    local_facenet_index: Optional[Index] = None,
+    local_arcface_index: Optional[Index] = None,
+    local_performers_mapping: Optional[dict[str, dict]] = None,
 ) -> MatchingResult:
     """
     Match a face against the database using both models.
@@ -342,6 +419,12 @@ def match_face(
         faces_mapping: List mapping face index to universal_id
         performers: Dict mapping universal_id to performer info
         config: Matching configuration
+        local_facenet_index: Optional secondary index built from this Stash
+            instance's own performer cover images (local_performer_index.py)
+        local_arcface_index: Same, ArcFace model
+        local_performers_mapping: str(performer_id) -> {name, stashdb_id,
+            image_url, ...} for the local index. Required alongside the two
+            local indices above for local matching to run.
 
     Returns:
         MatchingResult with candidates and diagnostics
@@ -351,7 +434,29 @@ def match_face(
     af_result = query_model(arcface_embedding, arcface_index, config)
 
     # Fuse results
-    return fuse_results(fn_result, af_result, faces_mapping, performers, config)
+    result = fuse_results(fn_result, af_result, faces_mapping, performers, config)
+
+    # Optionally merge in local-performer-index matches (see fuse_local_results).
+    # A handful of local performers is common (especially right after the
+    # first sync), so index.query()'s k can exceed the index size -- guard
+    # with try/except the same way the tattoo matcher does for its own
+    # small supplementary index, rather than requiring every caller to
+    # pre-check size.
+    if (local_facenet_index is not None and local_arcface_index is not None
+            and local_performers_mapping and len(local_facenet_index) > 0):
+        try:
+            local_fn_result = query_model(facenet_embedding, local_facenet_index, config)
+            local_af_result = query_model(arcface_embedding, local_arcface_index, config)
+            local_candidates = fuse_local_results(
+                local_fn_result, local_af_result, local_performers_mapping, config,
+            )
+            merged = result.matches + local_candidates
+            merged.sort(key=lambda c: c.combined_distance)
+            result.matches = [c for c in merged if c.combined_distance <= config.max_distance][:config.max_results]
+        except Exception as e:
+            logger.warning(f"Local performer index query failed, skipping local matches: {e}")
+
+    return result
 
 
 # =============================================================================
