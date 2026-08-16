@@ -606,6 +606,26 @@
         return `/performers/${localPerformerId}`;
       },
 
+      // Build the "View on ..." links for a match. Local matches always
+      // get a "View local performer" link; if the local performer is
+      // *also* linked to a real StashDB id (match.stashdb_id differs from
+      // match.local_performer_id -- the sidecar falls back to the local
+      // id string when there's no real link), show both, since that's two
+      // independent, separately-verifiable signals for the same person.
+      // Non-local matches keep the existing single StashBox link.
+      _matchLinksHtml(match, stashboxUrl, endpoint) {
+        if (!match.local_performer_id) {
+          return `<a href="${stashboxUrl}" target="_blank" rel="noopener" class="ss-link">View on ${endpoint}</a>`;
+        }
+        const localLink = `<a href="${this._localPerformerUrl(match.local_performer_id)}" target="_blank" rel="noopener" class="ss-link ss-link-local">View local performer</a>`;
+        const hasStashDbLink = match.stashdb_id && match.stashdb_id !== match.local_performer_id;
+        if (!hasStashDbLink) {
+          return localLink;
+        }
+        const stashDbUrl = this._stashboxPerformerUrl('stashdb.org', match.stashdb_id);
+        return `<a href="${stashDbUrl}" target="_blank" rel="noopener" class="ss-link">View on stashdb.org</a> ${localLink}`;
+      },
+
       // Resolve a match to its local Stash performer, if any is already in
       // the library. Local-index matches (match.local_performer_id set)
       // already know their local id directly -- no GraphQL round-trip
@@ -636,7 +656,6 @@
         const match = person.best_match;
         const confidence = this.distanceToConfidence(match.distance || (1 - match.confidence) || 0.5);
         const confidenceClass = SS.getConfidenceClass(confidence);
-        const isLocalMatch = !!match.local_performer_id;
         const endpoint = match.endpoint || 'stashdb.org';
         const stashboxUrl = this._stashboxPerformerUrl(endpoint, match.stashdb_id);
         const graphqlUrl = this._stashboxGraphqlUrl(endpoint);
@@ -689,9 +708,7 @@
               <div class="ss-confidence ${confidenceClass}">${confidence}% match</div>${person.signals_used && person.signals_used.includes('tattoo') ? '<span class="ss-signal-badge ss-signal-tattoo">tattoo match</span>' : ''}
               ${match.country ? `<div class="ss-country">${match.country}</div>` : ''}
               <div class="ss-links">
-                ${isLocalMatch
-                  ? `<a href="${this._localPerformerUrl(match.local_performer_id)}" target="_blank" rel="noopener" class="ss-link ss-link-local">View local performer</a>`
-                  : `<a href="${stashboxUrl}" target="_blank" rel="noopener" class="ss-link">View on ${endpoint}</a>`}
+                ${this._matchLinksHtml(match, stashboxUrl, endpoint)}
               </div>
               <div class="ss-actions">
                 ${actionsHtml}
@@ -710,7 +727,6 @@
           for (const m of person.all_matches.slice(1)) {
             const altConf = this.distanceToConfidence(m.distance || (1 - m.confidence) || 0.5);
             const altConfClass = SS.getConfidenceClass(altConf);
-            const altIsLocalMatch = !!m.local_performer_id;
             const altEndpoint = m.endpoint || 'stashdb.org';
             const altStashboxUrl = this._stashboxPerformerUrl(altEndpoint, m.stashdb_id);
             const altGraphqlUrl = this._stashboxGraphqlUrl(altEndpoint);
@@ -759,9 +775,7 @@
                   ${altShowAlreadyTagged ? '<span class="ss-tagged-badge ss-tagged-badge-sm">Tagged</span>' : ''}
                   ${m.country ? `<div class="ss-country">${m.country}</div>` : ''}
                   <div class="ss-links">
-                    ${altIsLocalMatch
-                      ? `<a href="${this._localPerformerUrl(m.local_performer_id)}" target="_blank" rel="noopener" class="ss-link ss-link-local">View local performer</a>`
-                      : `<a href="${altStashboxUrl}" target="_blank" rel="noopener" class="ss-link">View on ${altEndpoint}</a>`}
+                    ${this._matchLinksHtml(m, altStashboxUrl, altEndpoint)}
                   </div>
                   <div class="ss-actions ss-alt-match-actions">
                     ${altActionsHtml}
@@ -1044,7 +1058,6 @@
             const match = face.matches[0];
             const confidence = this.distanceToConfidence(match.distance);
             const confidenceClass = SS.getConfidenceClass(confidence);
-            const imgIsLocalMatch = !!match.local_performer_id;
             const imgEndpoint = match.endpoint || 'stashdb.org';
             const imgStashboxUrl = this._stashboxPerformerUrl(imgEndpoint, match.stashdb_id);
             const imgGraphqlUrl = this._stashboxGraphqlUrl(imgEndpoint);
@@ -1063,9 +1076,7 @@
                   <div class="ss-confidence ${confidenceClass}">${confidence}% match</div>
                   ${match.country ? `<div class="ss-country">${match.country}</div>` : ''}
                   <div class="ss-links">
-                    ${imgIsLocalMatch
-                      ? `<a href="${this._localPerformerUrl(match.local_performer_id)}" target="_blank" rel="noopener" class="ss-link ss-link-local">View local performer</a>`
-                      : `<a href="${imgStashboxUrl}" target="_blank" rel="noopener" class="ss-link">View on ${imgEndpoint}</a>`}
+                    ${this._matchLinksHtml(match, imgStashboxUrl, imgEndpoint)}
                   </div>
                   <div class="ss-actions">
                     ${localPerformer
@@ -1089,7 +1100,6 @@
               for (const m of face.matches.slice(1)) {
                 const altConf = this.distanceToConfidence(m.distance);
                 const altConfClass = SS.getConfidenceClass(altConf);
-                const altIsLocalMatch = !!m.local_performer_id;
                 const altEp = m.endpoint || 'stashdb.org';
                 const altUrl = this._stashboxPerformerUrl(altEp, m.stashdb_id);
                 const altGraphqlUrl = this._stashboxGraphqlUrl(altEp);
@@ -1106,9 +1116,7 @@
                       <div class="ss-confidence ${altConfClass}">${altConf}% match</div>
                       ${m.country ? `<div class="ss-country">${m.country}</div>` : ''}
                       <div class="ss-links">
-                        ${altIsLocalMatch
-                          ? `<a href="${this._localPerformerUrl(m.local_performer_id)}" target="_blank" rel="noopener" class="ss-link ss-link-local">View local performer</a>`
-                          : `<a href="${altUrl}" target="_blank" rel="noopener" class="ss-link">View on ${altEp}</a>`}
+                        ${this._matchLinksHtml(m, altUrl, altEp)}
                       </div>
                       <div class="ss-actions ss-alt-match-actions">
                         ${altLocalPerformer
@@ -1388,7 +1396,6 @@
           const confidence = this.distanceToConfidence(performer.best_distance);
           const confidenceClass = SS.getConfidenceClass(confidence);
 
-          const galIsLocalMatch = !!performer.local_performer_id;
           const galEndpoint = performer.endpoint || 'stashdb.org';
           const galStashboxUrl = this._stashboxPerformerUrl(galEndpoint, performer.performer_id);
           const galGraphqlUrl = this._stashboxGraphqlUrl(galEndpoint);
@@ -1410,9 +1417,10 @@
                 <div class="ss-confidence ${confidenceClass}">${confidence}% match</div>
                 ${performer.country ? `<div class="ss-country">${performer.country}</div>` : ''}
                 <div class="ss-links">
-                  ${galIsLocalMatch
-                    ? `<a href="${this._localPerformerUrl(performer.local_performer_id)}" target="_blank" rel="noopener" class="ss-link ss-link-local">View local performer</a>`
-                    : `<a href="${galStashboxUrl}" target="_blank" rel="noopener" class="ss-link">View on ${galEndpoint}</a>`}
+                  ${this._matchLinksHtml(
+                    { local_performer_id: performer.local_performer_id, stashdb_id: performer.performer_id },
+                    galStashboxUrl, galEndpoint,
+                  )}
                 </div>
                 ${localPerformer ? `
                   <div class="ss-gallery-performer-actions" data-performer-id="${localPerformer.id}" data-stashdb-id="${performer.performer_id}">

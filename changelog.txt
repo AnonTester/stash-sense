@@ -1,3 +1,20 @@
+## 2026-08-17
+
+### 0.12.16
+- Fix: Local performer cover images were stored with the sidecar's own
+  internal address baked in (e.g. http://192.168.1.100:9997/...), which the
+  sidecar uses to reach Stash's API -- but the browser rendering match
+  results may reach the same Stash instance through a completely
+  different address (a domain name, reverse proxy, VPN/tailnet IP).
+  Images now store as a root-relative path instead, resolving against
+  whatever origin the browser is actually using, the same way Stash's own
+  web UI references its images. Existing local index entries migrated in
+  place (no re-embedding needed, only the display URL changed).
+- Improvement: A local performer match that's also linked to a real
+  StashDB id now shows both a "View on stashdb.org" link and a "View
+  local performer" link, instead of only one -- two independently
+  verifiable signals for the same person.
+
 ## 2026-08-16
 
 ### 0.12.15
