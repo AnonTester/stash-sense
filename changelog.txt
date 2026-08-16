@@ -1,5 +1,12 @@
 ## 2026-08-16
 
+### 0.12.10
+- Fix: The CPU hardware tier also defaulted Frames Per Scene to 30 instead
+  of the 60 used by the GPU tiers -- same class of bug as 0.12.8's
+  Detection Resolution fix (a throughput-motivated CPU default that
+  actually affects match accuracy, not just speed). All tiers now default
+  to 60; still overridable lower for users who want the speed tradeoff.
+
 ### 0.12.9
 - Fix: The "Body Proportions"/"Tattoo Detection" Settings toggles had no
   effect on identification. Every caller of /identify, /identify/image,
