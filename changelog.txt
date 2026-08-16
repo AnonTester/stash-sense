@@ -1,5 +1,15 @@
 ## 2026-08-16
 
+### 0.12.8
+- Fix: The CPU hardware tier defaulted Detection Resolution to 320 instead
+  of the 640 used by the GPU tiers. Unlike the other CPU-tier defaults
+  (embedding batch size, frame extraction concurrency -- pure throughput
+  knobs), detection resolution affects match accuracy: confirmed live on
+  a CPU-only install that re-detecting at 640 instead of 320 recovered
+  faces in scenes that had found none at the lower resolution. All tiers
+  now default to 640; still overridable lower if the speed tradeoff is
+  wanted.
+
 ### 0.12.7
 - Feature: When fingerprinting finds zero usable faces in a scene, it now
   retries once with the same number of sampled frames but the whole

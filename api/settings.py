@@ -183,7 +183,12 @@ TIER_DEFAULTS: dict[str, dict[str, Any]] = {
     "cpu": {
         "embedding_batch_size": 4,
         "frame_extraction_concurrency": 2,
-        "detection_size": 320,
+        # Detection resolution affects match accuracy, not just speed --
+        # unlike batch size/concurrency (pure throughput knobs), defaulting
+        # this lower on CPU-only hardware silently degrades results. Keep
+        # it at the same 640 as the GPU tiers; users who want the speed
+        # tradeoff can still lower it explicitly.
+        "detection_size": 640,
         "num_frames": 30,
         "gpu_enabled": False,
     },
