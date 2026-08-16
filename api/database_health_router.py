@@ -66,6 +66,7 @@ class HealthResponse(BaseModel):
     performer_count: int = 0
     face_count: int = 0
     version: Optional[str] = None
+    face_recognition_loading: bool = False
 
 
 class CheckUpdateResponse(BaseModel):
@@ -111,11 +112,21 @@ async def health_check():
     from main import app as _app
     _version = getattr(_app, "version", None)
 
+    face_recognition_loading = False
+    try:
+        from resource_manager import get_resource_manager
+        status = get_resource_manager().get_status().get("face_recognition")
+        if status:
+            face_recognition_loading = status["loading"]
+    except RuntimeError:
+        pass  # ResourceManager not initialized yet (very early startup)
+
     if _recognizer is None:
         return HealthResponse(
             status="degraded",
             database_loaded=False,
             version=_version,
+            face_recognition_loading=face_recognition_loading,
         )
 
     return HealthResponse(
@@ -124,6 +135,7 @@ async def health_check():
         performer_count=len(_recognizer.performers),
         face_count=len(_recognizer.faces),
         version=_version,
+        face_recognition_loading=face_recognition_loading,
     )
 
 

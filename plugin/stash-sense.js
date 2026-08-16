@@ -22,6 +22,42 @@
   waitForCore(() => {
     const SS = window.StashSense;
 
+    // Poll /health while an identify request is in flight so the loading
+    // modal can show real feedback during the multi-second lazy model load
+    // (face recognition + tattoo/body models) instead of sitting on
+    // "Connecting to Stash Sense..." with no indication anything is
+    // happening. Returns a stop function; safe to call even if the identify
+    // request finishes before the first poll response comes back.
+    function pollModelLoading(sidecarUrl, onProgress) {
+      let stopped = false;
+      let shownLoadingMessage = false;
+
+      const poll = async () => {
+        if (stopped) return;
+        try {
+          const health = await SS.runPluginOperation('health', { sidecar_url: sidecarUrl });
+          if (stopped) return;
+          if (health && health.face_recognition_loading) {
+            shownLoadingMessage = true;
+            onProgress?.('Loading face recognition models (first use after idle)...');
+          } else if (shownLoadingMessage) {
+            shownLoadingMessage = false;
+            onProgress?.('Identifying performers...');
+          }
+        } catch (e) {
+          // Ignore poll errors -- this is best-effort UI feedback, not
+          // load-bearing for the actual identify request.
+        }
+      };
+
+      poll();
+      const interval = setInterval(poll, 700);
+      return () => {
+        stopped = true;
+        clearInterval(interval);
+      };
+    }
+
     // ==================== Face Recognition Module ====================
 
     const FaceRecognition = {
@@ -59,33 +95,38 @@
         const settings = await SS.getSettings();
         onProgress?.('Connecting to Stash Sense...');
 
-        // Get existing performer StashDB IDs for tagged-performer awareness
-        const scenePerformers = await this.getScenePerformerStashDBIds(sceneId);
-        const stashdbIds = [];
-        for (const p of scenePerformers) {
-          for (const sid of (p.stash_ids || [])) {
-            if (sid.endpoint === 'https://stashdb.org/graphql') {
-              stashdbIds.push(sid.stash_id);
+        const stopPolling = pollModelLoading(settings.sidecarUrl, onProgress);
+        try {
+          // Get existing performer StashDB IDs for tagged-performer awareness
+          const scenePerformers = await this.getScenePerformerStashDBIds(sceneId);
+          const stashdbIds = [];
+          for (const p of scenePerformers) {
+            for (const sid of (p.stash_ids || [])) {
+              if (sid.endpoint === 'https://stashdb.org/graphql') {
+                stashdbIds.push(sid.stash_id);
+              }
             }
           }
+
+          const result = await SS.runPluginOperation('identify_scene', {
+            scene_id: sceneId,
+            sidecar_url: settings.sidecarUrl,
+            top_k: settings.maxResults,
+            scene_performer_stashdb_ids: stashdbIds,
+            // Omitted params (num_frames, max_distance, min_face_size) default from sidecar face_config.py
+          });
+
+          if (result.error) {
+            throw new Error(result.error);
+          }
+
+          // Attach scene performers for UI rendering
+          result._scenePerformers = scenePerformers;
+
+          return result;
+        } finally {
+          stopPolling();
         }
-
-        const result = await SS.runPluginOperation('identify_scene', {
-          scene_id: sceneId,
-          sidecar_url: settings.sidecarUrl,
-          top_k: settings.maxResults,
-          scene_performer_stashdb_ids: stashdbIds,
-          // Omitted params (num_frames, max_distance, min_face_size) default from sidecar face_config.py
-        });
-
-        if (result.error) {
-          throw new Error(result.error);
-        }
-
-        // Attach scene performers for UI rendering
-        result._scenePerformers = scenePerformers;
-
-        return result;
       },
 
       // Add performer to scene
@@ -128,16 +169,21 @@
         const settings = await SS.getSettings();
         onProgress?.('Connecting to Stash Sense...');
 
-        const result = await SS.runPluginOperation('identify_image', {
-          image_id: imageId,
-          sidecar_url: settings.sidecarUrl,
-        });
+        const stopPolling = pollModelLoading(settings.sidecarUrl, onProgress);
+        try {
+          const result = await SS.runPluginOperation('identify_image', {
+            image_id: imageId,
+            sidecar_url: settings.sidecarUrl,
+          });
 
-        if (result.error) {
-          throw new Error(result.error);
+          if (result.error) {
+            throw new Error(result.error);
+          }
+
+          return result;
+        } finally {
+          stopPolling();
         }
-
-        return result;
       },
 
       // Add performer to image
@@ -1200,16 +1246,21 @@
         const settings = await SS.getSettings();
         onProgress?.('Connecting to Stash Sense...');
 
-        const result = await SS.runPluginOperation('identify_gallery', {
-          gallery_id: galleryId,
-          sidecar_url: settings.sidecarUrl,
-        });
+        const stopPolling = pollModelLoading(settings.sidecarUrl, onProgress);
+        try {
+          const result = await SS.runPluginOperation('identify_gallery', {
+            gallery_id: galleryId,
+            sidecar_url: settings.sidecarUrl,
+          });
 
-        if (result.error) {
-          throw new Error(result.error);
+          if (result.error) {
+            throw new Error(result.error);
+          }
+
+          return result;
+        } finally {
+          stopPolling();
         }
-
-        return result;
       },
 
       // Add performer to gallery

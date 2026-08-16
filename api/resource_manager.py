@@ -41,8 +41,15 @@ class ResourceGroup:
     unloader: Callable[[], None]
     data: Any = None
     loaded: bool = False
+    loading: bool = False
     last_access: float = 0.0
     load_time_seconds: float = 0.0
+    # Serializes the actual loader() call, held separately from the
+    # manager's main lock so status queries (get_status/is_loaded) stay
+    # responsive while a load is in progress -- e.g. so a frontend can poll
+    # and show "loading models" feedback instead of the request just
+    # hanging with no explanation.
+    load_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 # ============================================================================
@@ -104,25 +111,39 @@ class ResourceManager:
             group = self._groups.get(name)
             if group is None:
                 raise KeyError(f"Resource group not registered: {name}")
-
             if group.loaded:
                 group.last_access = time.monotonic()
                 return group.data
 
-            # Load the resource (may raise)
+        # The actual (possibly slow) loader() call runs outside self._lock,
+        # serialized instead by the group's own load_lock -- concurrent
+        # callers block here (correctly: they need the loaded data too),
+        # but self._lock stays free so get_status()/is_loaded() keep
+        # answering immediately, reporting loading=True while this runs.
+        with group.load_lock:
+            with self._lock:
+                if group.loaded:
+                    group.last_access = time.monotonic()
+                    return group.data
+                group.loading = True
+
             logger.warning(f"Loading resource group: {name}")
             start = time.monotonic()
             try:
                 data = group.loader()
             except Exception:
+                with self._lock:
+                    group.loading = False
                 logger.warning(f"Failed to load resource group: {name}")
                 raise
 
             elapsed = time.monotonic() - start
-            group.data = data
-            group.loaded = True
-            group.last_access = time.monotonic()
-            group.load_time_seconds = elapsed
+            with self._lock:
+                group.data = data
+                group.loaded = True
+                group.loading = False
+                group.last_access = time.monotonic()
+                group.load_time_seconds = elapsed
             logger.warning(f"Loaded resource group: {name} in {elapsed:.2f}s")
             return group.data
 
@@ -226,6 +247,7 @@ class ResourceManager:
         Returns:
             Dict keyed by group name with:
                 - loaded (bool): Whether the group is currently loaded.
+                - loading (bool): Whether a loader() call is in progress.
                 - idle_seconds (float | None): Seconds since last access, or
                     None if not loaded.
                 - load_time_seconds (float): Time taken to load, or 0.0 if
@@ -243,6 +265,7 @@ class ResourceManager:
 
                 result[name] = {
                     "loaded": group.loaded,
+                    "loading": group.loading,
                     "idle_seconds": idle_seconds,
                     "load_time_seconds": group.load_time_seconds,
                 }

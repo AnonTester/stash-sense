@@ -1,5 +1,34 @@
 ## 2026-08-16
 
+### 0.12.9
+- Fix: The "Body Proportions"/"Tattoo Detection" Settings toggles had no
+  effect on identification. Every caller of /identify, /identify/image,
+  and /identify/scene (the Stash Face Identification button, and
+  fingerprint_generator.py's bulk job) omitted use_body/use_tattoo from
+  its request entirely, so the endpoint's hardcoded True default was
+  always used regardless of the toggle. Confirmed live: disabling Tattoo
+  Detection and re-running identification on a scene still showed a
+  tattoo-match flag and identical results. Now resolved from the current
+  setting whenever a caller doesn't explicitly override it.
+- Improvement: Body/tattoo extraction during fingerprinting now always
+  runs (and gets cached) when the underlying models are available,
+  independent of whether the respective Settings toggle is currently
+  enabled -- only *using* the signal to influence match ranking (and the
+  tattoo-match indicator shown to the caller) respects the toggle. This
+  means re-enabling a signal later doesn't require re-fingerprinting
+  every scene to pick it back up.
+- Fix: Lazy-loading the face recognition models (RetinaFace, FaceNet512,
+  ArcFace, tattoo/body models -- a multi-second cold load after 30 min
+  idle) blocked the sidecar's entire event loop, so a concurrent /health
+  check would just hang for the same duration instead of responding. Now
+  runs off the event loop, and /health reports a face_recognition_loading
+  flag while it's in progress.
+- Improvement: The "Connecting to Stash Sense..." modal (Face
+  Identification button on a scene/image/gallery) now polls that flag and
+  switches to "Loading face recognition models..." while the lazy load is
+  actually happening, instead of sitting on the same static message with
+  no indication of what's taking a few seconds.
+
 ### 0.12.8
 - Fix: The CPU hardware tier defaulted Detection Resolution to 320 instead
   of the 640 used by the GPU tiers. Unlike the other CPU-tier defaults
