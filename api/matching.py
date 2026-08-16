@@ -351,6 +351,20 @@ def fuse_local_results(
     (mirroring the existing "stashdb.org:" convention -- see
     stashbox_utils._extract_endpoint, which will naturally read this as
     endpoint "local") and scored down by LOCAL_MATCH_BOOST.
+
+    Requires BOTH models to have ranked a candidate before trusting it --
+    unlike fuse_results()'s "weighted" strategy, which treats a
+    single-model candidate as reasonably trustworthy with a 0.5 penalty
+    for the missing model (calibrated for the main index's ~450k
+    candidates, where being outside one model's query_k neighbors doesn't
+    say much). Confirmed live: with the local index's much smaller
+    candidate pool (~1-2k), a candidate landing in only one model's top-K
+    is common and weak evidence on its own -- trusting it directly (this
+    function's original behavior) let a single model's coincidental
+    agreement get boosted into an artificially high-confidence wrong
+    match (e.g. a video frame face with a low ArcFace distance to a given
+    local performer but no FaceNet signal for them at all was scored
+    using ArcFace alone, then boosted further by LOCAL_MATCH_BOOST).
     """
     candidates: dict[str, CandidateMatch] = {}
 
@@ -377,19 +391,17 @@ def fuse_local_results(
     _process(facenet_result, True)
     _process(arcface_result, False)
 
-    for candidate in candidates.values():
-        fn_dist = candidate.facenet_distance
-        af_dist = candidate.arcface_distance
-        if fn_dist is not None and af_dist is not None:
-            combined = fn_dist * config.facenet_weight + af_dist * config.arcface_weight
-        elif fn_dist is not None:
-            combined = fn_dist
-        elif af_dist is not None:
-            combined = af_dist
-        else:
-            continue
+    corroborated = {
+        uid: c for uid, c in candidates.items()
+        if c.facenet_distance is not None and c.arcface_distance is not None
+    }
+    for candidate in corroborated.values():
+        combined = (candidate.facenet_distance * config.facenet_weight
+                    + candidate.arcface_distance * config.arcface_weight)
         candidate.combined_distance = combined * LOCAL_MATCH_BOOST
         candidate.confidence = max(0.0, min(1.0, 1.0 - candidate.combined_distance))
+
+    return list(corroborated.values())
 
     return list(candidates.values())
 

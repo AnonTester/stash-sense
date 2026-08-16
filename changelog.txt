@@ -1,5 +1,27 @@
 ## 2026-08-16
 
+### 0.12.15
+- Fix: Local performer matches could be scored using only a single model
+  (FaceNet or ArcFace) whenever the other model didn't rank the candidate
+  at all -- common for the local index given its much smaller candidate
+  pool (~1-2k) compared to the main database (~450k). Trusting a single
+  model's raw distance as if it were the full combined score, then
+  applying the local-match boost on top, could turn a coincidental
+  single-model agreement into an artificially high-confidence wrong
+  match, displacing the correct (already-tagged) performer. Confirmed
+  live on two real scenes: a group scene where a phantom 90% local match
+  fragmented what should have been two clean person clusters (the
+  correct performers now both resolve correctly, tagged, ~62% each), and
+  a single-person scene where a wrong local match at 84% outranked the
+  correct tagged performer at 67% (now correctly ranked first at 67%,
+  wrong match reduced to 72%). Local matches now require both models to
+  agree before being trusted, mirroring the main index's existing
+  penalty-for-missing-model handling rather than skipping it.
+- Improvement: Local performer matches now show a "View local performer"
+  link (opens the performer's page on this Stash instance) instead of a
+  plain "in your local library" badge with no way to open/verify the
+  match.
+
 ### 0.12.14
 - Fix: The local performer sync's retry-cache file (used when the hook
   fires while the sidecar is unreachable) never cleared itself once the

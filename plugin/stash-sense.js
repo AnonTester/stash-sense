@@ -599,6 +599,13 @@
         return `https://${domain}/graphql`;
       },
 
+      // Local performers have no StashBox page to link to -- link to their
+      // page on this Stash instance instead, so a match can still be
+      // opened and verified.
+      _localPerformerUrl(localPerformerId) {
+        return `/performers/${localPerformerId}`;
+      },
+
       // Resolve a match to its local Stash performer, if any is already in
       // the library. Local-index matches (match.local_performer_id set)
       // already know their local id directly -- no GraphQL round-trip
@@ -683,7 +690,7 @@
               ${match.country ? `<div class="ss-country">${match.country}</div>` : ''}
               <div class="ss-links">
                 ${isLocalMatch
-                  ? '<span class="ss-badge ss-badge-local">In your local library</span>'
+                  ? `<a href="${this._localPerformerUrl(match.local_performer_id)}" target="_blank" rel="noopener" class="ss-link ss-link-local">View local performer</a>`
                   : `<a href="${stashboxUrl}" target="_blank" rel="noopener" class="ss-link">View on ${endpoint}</a>`}
               </div>
               <div class="ss-actions">
@@ -753,7 +760,7 @@
                   ${m.country ? `<div class="ss-country">${m.country}</div>` : ''}
                   <div class="ss-links">
                     ${altIsLocalMatch
-                      ? '<span class="ss-badge ss-badge-local">In your local library</span>'
+                      ? `<a href="${this._localPerformerUrl(m.local_performer_id)}" target="_blank" rel="noopener" class="ss-link ss-link-local">View local performer</a>`
                       : `<a href="${altStashboxUrl}" target="_blank" rel="noopener" class="ss-link">View on ${altEndpoint}</a>`}
                   </div>
                   <div class="ss-actions ss-alt-match-actions">
@@ -1057,7 +1064,7 @@
                   ${match.country ? `<div class="ss-country">${match.country}</div>` : ''}
                   <div class="ss-links">
                     ${imgIsLocalMatch
-                      ? '<span class="ss-badge ss-badge-local">In your local library</span>'
+                      ? `<a href="${this._localPerformerUrl(match.local_performer_id)}" target="_blank" rel="noopener" class="ss-link ss-link-local">View local performer</a>`
                       : `<a href="${imgStashboxUrl}" target="_blank" rel="noopener" class="ss-link">View on ${imgEndpoint}</a>`}
                   </div>
                   <div class="ss-actions">
@@ -1100,7 +1107,7 @@
                       ${m.country ? `<div class="ss-country">${m.country}</div>` : ''}
                       <div class="ss-links">
                         ${altIsLocalMatch
-                          ? '<span class="ss-badge ss-badge-local">In your local library</span>'
+                          ? `<a href="${this._localPerformerUrl(m.local_performer_id)}" target="_blank" rel="noopener" class="ss-link ss-link-local">View local performer</a>`
                           : `<a href="${altUrl}" target="_blank" rel="noopener" class="ss-link">View on ${altEp}</a>`}
                       </div>
                       <div class="ss-actions ss-alt-match-actions">
@@ -1404,7 +1411,7 @@
                 ${performer.country ? `<div class="ss-country">${performer.country}</div>` : ''}
                 <div class="ss-links">
                   ${galIsLocalMatch
-                    ? '<span class="ss-badge ss-badge-local">In your local library</span>'
+                    ? `<a href="${this._localPerformerUrl(performer.local_performer_id)}" target="_blank" rel="noopener" class="ss-link ss-link-local">View local performer</a>`
                     : `<a href="${galStashboxUrl}" target="_blank" rel="noopener" class="ss-link">View on ${galEndpoint}</a>`}
                 </div>
                 ${localPerformer ? `
