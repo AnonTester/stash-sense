@@ -77,10 +77,21 @@ class LocalPerformerIndex:
         }
 
     def remove(self, performer_id: int) -> None:
-        if performer_id in self.facenet_index:
-            del self.facenet_index[performer_id]  # Index.__delitem__ == mark_deleted
-        if performer_id in self.arcface_index:
-            del self.arcface_index[performer_id]
+        for idx in (self.facenet_index, self.arcface_index):
+            if performer_id in idx:
+                try:
+                    del idx[performer_id]  # Index.__delitem__ == mark_deleted
+                except RuntimeError:
+                    # Voyager can raise "already deleted" here even right
+                    # after `in` reported the id present -- confirmed live,
+                    # apparently a tombstone-state inconsistency introduced
+                    # by a save()/load() round-trip. Either way the end
+                    # state (id absent) is already what remove() wants, so
+                    # treat it as a no-op rather than letting a 500 through
+                    # to the hook caller and permanently stuck a retry-cache
+                    # entry (nothing about retrying this exact call would
+                    # ever succeed).
+                    pass
         self.mapping.pop(str(performer_id), None)
 
     def get_image_hash(self, performer_id: int) -> Optional[str]:
