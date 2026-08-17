@@ -1,6 +1,22 @@
 ## 2026-08-17
 
-### 0.12.17
+### 0.12.18
+- Fix: "Add to Scene"/"Add to Stash + Scene" could add the wrong
+  performer to the scene's edit form. After the real mutation (which
+  always completed correctly), the plugin tried to also visually reflect
+  the change in an already-open edit form by typing the performer's name
+  into Stash's own performer field and pressing Enter to confirm
+  whichever suggestion that landed on. Since the performer was already
+  added server-side by that point, Stash's own field correctly excludes
+  them from their own suggestions -- so Enter would confirm some *other*
+  match instead. Confirmed live: adding a newly-created performer whose
+  exact name collided with an existing, unrelated performer's alias
+  surfaced that unrelated performer as the top remaining suggestion, and
+  Enter selected them. The underlying scene data was never actually
+  corrupted (confirmed via direct query), but a saved edit form after
+  seeing the wrong suggestion would have been. Removed the DOM-typing
+  step entirely -- the mutation was already sufficient; an open edit
+  form just won't visually reflect the change until refreshed.
 - Fix: The local performer sync hook could permanently fail for a
   performer with "Internal Server Error" after a delete, leaving it
   stuck in the retry cache forever (every later flush attempt hit the

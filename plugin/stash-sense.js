@@ -286,101 +286,23 @@
         return modal;
       },
 
-      _setNativeInputValue(input, value) {
-        const proto = Object.getPrototypeOf(input);
-        const desc = Object.getOwnPropertyDescriptor(proto, 'value')
-          || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
-        if (desc?.set) {
-          desc.set.call(input, value);
-        } else {
-          input.value = value;
-        }
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-      },
-
-      _findPerformerFieldInput() {
-        const inputs = Array.from(document.querySelectorAll('input[type="text"], input:not([type])'))
-          .filter((el) => {
-            if (!el || el.offsetParent === null || el.disabled || el.readOnly) return false;
-            // Ignore any controls inside the Stash Sense modal itself.
-            if (el.closest('#ss-modal')) return false;
-            return true;
-          });
-        if (inputs.length === 0) return null;
-
-        const score = (el) => {
-          const id = (el.id || '').toLowerCase();
-          const name = (el.name || '').toLowerCase();
-          const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-          const ph = (el.getAttribute('placeholder') || '').toLowerCase();
-          const cls = (el.className || '').toLowerCase();
-          const groupText = (el.closest('label, .form-group, .form-row, .detail-item, .entity-edit, .scene-tabs, .scene-detail, .react-select, [class*="performer"], [id*="performer"]')?.textContent || '').toLowerCase();
-          const wrapText = (el.closest('form, .detail-container, .scene-tabs, .scene-detail, .entity-edit')?.textContent || '').toLowerCase();
-
-          let s = 0;
-          if (id.includes('performer')) s += 8;
-          if (name.includes('performer')) s += 8;
-          if (aria.includes('performer')) s += 10;
-          if (ph.includes('performer')) s += 10;
-          if (cls.includes('select') || cls.includes('react-select')) s += 6;
-          if (el.closest('[class*="react-select"], [class*="Select"]')) s += 4;
-          if (el.closest('[class*="performer"], [id*="performer"]')) s += 6;
-          if (groupText.includes('performer')) s += 12;
-          if (wrapText.includes('performers')) s += 3;
-          if (((el.value || '').trim()).length === 0) s += 1;
-          return s;
-        };
-
-        const ranked = inputs
-          .map((el) => ({ el, s: score(el) }))
-          .sort((a, b) => b.s - a.s);
-        return ranked[0]?.s > 0 ? ranked[0].el : null;
-      },
-
-      async _injectPerformersIntoField(performerNames = []) {
-        if (!performerNames || performerNames.length === 0) return false;
-        const input = this._findPerformerFieldInput();
-        if (!input) return false;
-
-        const names = Array.from(new Set(
-          performerNames
-            .map((n) => (n || '').trim())
-            .filter(Boolean),
-        ));
-        if (names.length === 0) return false;
-
-        // Best-effort react-select interaction: type performer name and confirm
-        // with Enter to add to the current field state.
-        for (const name of names) {
-          input.focus();
-          this._setNativeInputValue(input, name);
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-          await new Promise((r) => setTimeout(r, 180));
-          const enterEvt = {
-            key: 'Enter',
-            code: 'Enter',
-            keyCode: 13,
-            which: 13,
-            bubbles: true,
-            cancelable: true,
-          };
-          input.dispatchEvent(new KeyboardEvent('keydown', enterEvt));
-          input.dispatchEvent(new KeyboardEvent('keypress', enterEvt));
-          input.dispatchEvent(new KeyboardEvent('keyup', enterEvt));
-          await new Promise((r) => setTimeout(r, 180));
-        }
-        // Clear residual text in the typeahead input.
-        this._setNativeInputValue(input, '');
-        return true;
-      },
-
-      async _finishMutation(modal, performerNames = []) {
-        // Preserve any unsaved form edits. Do not reload the page.
-        try {
-          await this._injectPerformersIntoField(performerNames);
-        } catch (e) {
-          console.debug('[Stash Sense] Could not inject performer field values:', e);
-        }
+      // Close the results modal after a successful add/create mutation.
+      //
+      // This used to also try to visually reflect the change in an
+      // already-open scene/image edit form, by typing the performer's name
+      // into Stash's own react-select field and pressing Enter to confirm
+      // whatever suggestion that landed on. That was unsafe: the mutation
+      // above already adds the performer server-side, so by the time this
+      // runs, react-select's own "already selected" filtering excludes
+      // them from their own suggestion list -- meaning Enter would confirm
+      // some *other* unrelated suggestion instead. Confirmed live: typing
+      // a newly-added performer's exact name surfaced a same-named-alias
+      // performer as the top (and only sensible) remaining match, and
+      // pressing Enter added *that* performer to the scene instead of a
+      // no-op. The mutation itself is correct and already saved; the
+      // scene/image edit form (if open) just won't visually reflect it
+      // until the page is refreshed.
+      async _finishMutation(modal) {
         if (modal && typeof modal._close === 'function') {
           modal._close();
         }
@@ -513,9 +435,7 @@
             if (success) {
               btn.textContent = 'Added!';
               btn.classList.add('ss-btn-success');
-              const localStatus = btn.closest('.ss-actions, .ss-alt-match-actions')?.querySelector('.ss-local-status');
-              const inferredName = (localStatus?.textContent || '').replace(/^In library as:\s*/i, '').trim();
-              await this._finishMutation(modal, inferredName ? [inferredName] : []);
+              await this._finishMutation(modal);
             } else {
               btn.textContent = 'Failed';
               btn.classList.add('ss-btn-error');
@@ -549,7 +469,7 @@
 
               btn.textContent = 'Added!';
               btn.classList.add('ss-btn-success');
-              await this._finishMutation(modal, [result.name || '']);
+              await this._finishMutation(modal);
             } catch (err) {
               // Fallback: if the plugin call timed out but performer creation
               // actually succeeded, complete UI flow anyway.
@@ -561,7 +481,7 @@
                     await this.addPerformerToScene(targetSceneId, localPerformer.id);
                     btn.textContent = 'Added!';
                     btn.classList.add('ss-btn-success');
-                    await this._finishMutation(modal, [localPerformer.name || '']);
+                    await this._finishMutation(modal);
                     return;
                   }
                 } catch (recoveryErr) {
@@ -905,7 +825,7 @@
                       notInLib.classList.remove('ss-not-in-library');
                     }
                     const modal = triggerBtn.closest('#ss-modal');
-                    await self._finishMutation(modal, [performerName || '']);
+                    await self._finishMutation(modal);
                   } catch (err) {
                     panel.innerHTML = `<div class="ss-search-error">Failed: ${SS.escapeHtml(err.message)}</div>`;
                     console.error('Failed to link performer:', err);
@@ -1152,9 +1072,7 @@
             if (success) {
               btn.textContent = 'Added!';
               btn.classList.add('ss-btn-success');
-              const localStatus = btn.closest('.ss-actions, .ss-alt-match-actions')?.querySelector('.ss-local-status');
-              const inferredName = (localStatus?.textContent || '').replace(/^In library as:\s*/i, '').trim();
-              await this._finishMutation(modal, inferredName ? [inferredName] : []);
+              await this._finishMutation(modal);
             } else {
               btn.textContent = 'Failed';
               btn.classList.add('ss-btn-error');
@@ -1482,9 +1400,7 @@
             btn.textContent = tagImages ? `Added to gallery + ${imageIds.length} images` : 'Added to gallery!';
             btn.classList.add('ss-btn-success');
             if (!deferFinish && !bulkAcceptInProgress) {
-              const localStatus = btn.closest('.ss-actions, .ss-gallery-performer-actions')?.querySelector('.ss-local-status');
-              const inferredName = (localStatus?.textContent || '').replace(/^In library as:\s*/i, '').trim();
-              await this._finishMutation(modal, inferredName ? [inferredName] : []);
+              await this._finishMutation(modal);
             }
           } else {
             btn.textContent = 'Failed';
@@ -1522,10 +1438,7 @@
           if (successCount > 0) {
             acceptAllBtn.textContent = `Accepted ${successCount}`;
             acceptAllBtn.classList.add('ss-btn-success');
-            const names = Array.from(resultsDiv.querySelectorAll('.ss-gallery-performer-actions .ss-local-status'))
-              .map((el) => (el.textContent || '').replace(/^In library as:\s*/i, '').trim())
-              .filter(Boolean);
-            await this._finishMutation(modal, names);
+            await this._finishMutation(modal);
           } else {
             acceptAllBtn.textContent = 'No changes applied';
             acceptAllBtn.classList.add('ss-btn-error');
