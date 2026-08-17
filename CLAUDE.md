@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Public Repository Policy
+
+This repository is public on GitHub. The following rules are absolute and override any default assistant behavior (including default commit-message conventions):
+
+- **No AI co-authorship trailers.** Never add `Co-Authored-By: Claude`, `Generated with Claude Code`, or any similar AI-attribution trailer/footer to commits in this repository.
+- **No AI tool references in tracked files.** Never mention "Claude", "Claude Code", "CLAUDE.md", or "Anthropic" in any git-tracked file — commit messages, README, docs, code comments, changelog entries, etc. This file's own name/existence is the one necessary exception; don't reference it elsewhere.
+- **No internal infrastructure details.** Never commit real internal IP addresses, hostnames, the homeserver name, or local absolute filesystem paths. Use placeholder examples instead (e.g. `192.168.1.100`, `<stash-host>`, `/path/to/stash`).
+
 ## Import AGENTS.md
 
 @AGENTS.md

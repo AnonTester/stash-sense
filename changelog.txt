@@ -1,5 +1,11 @@
 ## 2026-08-17
 
+### 0.12.19
+- Docs: Added an explicit public-repository policy to CLAUDE.md -- no AI
+  co-authorship trailers on commits, no AI tool references in tracked
+  files, and no internal infrastructure details (real IPs, hostnames,
+  local paths) committed to the repo.
+
 ### 0.12.18
 - Fix: "Add to Scene"/"Add to Stash + Scene" could add the wrong
   performer to the scene's edit form. After the real mutation (which
