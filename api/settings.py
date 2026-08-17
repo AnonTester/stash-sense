@@ -123,9 +123,11 @@ _define("tattoo_signal_enabled", "Tattoo Detection",
 # -- Local Performers --
 _define("local_performer_auto_sync_enabled", "Auto-Sync on Performer Changes",
         "Automatically update the local performer index in the background whenever a "
-        "performer is added, edited, or removed in this Stash instance (via a plugin "
+        "performer is added, edited, or deleted in this Stash instance (via a plugin "
         "hook). Falls back to the scheduled/manual Local Performer Sync task if the "
-        "sidecar is unreachable when a change happens.",
+        "sidecar is unreachable when a change happens. Note: merging performers does "
+        "not trigger this hook (Stash doesn't fire one for merges) -- run Local "
+        "Performer Sync manually after a merge, or wait for its scheduled run.",
         "local_performers", SettingType.BOOL, fallback=False)
 
 # -- Upstream Sync --

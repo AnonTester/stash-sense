@@ -1,5 +1,22 @@
 ## 2026-08-17
 
+### 0.12.17
+- Fix: The local performer sync hook could permanently fail for a
+  performer with "Internal Server Error" after a delete, leaving it
+  stuck in the retry cache forever (every later flush attempt hit the
+  same error and gave up). Root cause: Voyager's index can raise
+  "already deleted" from a delete call even immediately after `in`
+  reported the id as still present -- confirmed live, apparently a
+  tombstone-state inconsistency after a save()/load() round-trip.
+  remove() now treats that as a no-op instead of letting it surface as
+  an unhandled 500, since the end state (id absent) was already correct.
+- Clarified: confirmed live that merging one performer into another does
+  not fire any plugin hook in Stash (not Create, Update, or Destroy) --
+  so the auto-sync hook has no way to know a merge happened. The
+  scheduled/manual Local Performer Sync task is the only thing that
+  picks this up. Updated the Auto-Sync setting's description to say so
+  explicitly instead of implying full "added/edited/removed" coverage.
+
 ### 0.12.16
 - Fix: Local performer cover images were stored with the sidecar's own
   internal address baked in (e.g. http://192.168.1.100:9997/...), which the
