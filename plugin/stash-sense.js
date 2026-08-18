@@ -286,23 +286,39 @@
         return modal;
       },
 
-      // Close the results modal after a successful add/create mutation.
+      // Show a small persistent banner at the top of the modal confirming
+      // the mutation succeeded and that an already-open scene/image edit
+      // form won't visually reflect it without a refresh.
       //
-      // This used to also try to visually reflect the change in an
-      // already-open scene/image edit form, by typing the performer's name
-      // into Stash's own react-select field and pressing Enter to confirm
-      // whatever suggestion that landed on. That was unsafe: the mutation
-      // above already adds the performer server-side, so by the time this
-      // runs, react-select's own "already selected" filtering excludes
-      // them from their own suggestion list -- meaning Enter would confirm
+      // This used to instead try to reflect the change directly in an
+      // open edit form, by typing the performer's name into Stash's own
+      // react-select field and pressing Enter to confirm whatever
+      // suggestion that landed on. That was unsafe: the mutation already
+      // adds the performer server-side, so by the time this runs,
+      // react-select's own "already selected" filtering excludes them
+      // from their own suggestion list -- meaning Enter would confirm
       // some *other* unrelated suggestion instead. Confirmed live: typing
       // a newly-added performer's exact name surfaced a same-named-alias
       // performer as the top (and only sensible) remaining match, and
       // pressing Enter added *that* performer to the scene instead of a
-      // no-op. The mutation itself is correct and already saved; the
-      // scene/image edit form (if open) just won't visually reflect it
-      // until the page is refreshed.
-      async _finishMutation(modal) {
+      // no-op. The mutation itself is correct and already saved -- the
+      // honest fix is telling the user a refresh is needed to see it, not
+      // trying to fake it via more DOM tricks.
+      _showRefreshNotice(modal) {
+        const body = modal?.querySelector('.ss-modal-body');
+        if (!body) return;
+        let notice = body.querySelector('.ss-refresh-notice');
+        if (!notice) {
+          notice = document.createElement('div');
+          notice.className = 'ss-refresh-notice';
+          body.insertBefore(notice, body.firstChild);
+        }
+        notice.textContent = 'Added. Refresh the page to see it reflected here if you have this scene/image open for editing.';
+      },
+
+      async _finishMutation(modal, delayMs = 2200) {
+        this._showRefreshNotice(modal);
+        await new Promise((r) => setTimeout(r, delayMs));
         if (modal && typeof modal._close === 'function') {
           modal._close();
         }

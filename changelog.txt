@@ -1,3 +1,23 @@
+## 2026-08-18
+
+### 0.12.21
+- Improvement: 0.12.18 removed an unsafe attempt to auto-select a
+  newly-added performer in an already-open scene/image edit form (it
+  could pick the wrong performer -- see that entry), but left no visual
+  confirmation beyond the button's brief "Added!" state. Now shows a
+  short banner in the results modal confirming the performer was added
+  and noting that an open edit form needs a refresh to reflect it.
+
+### 0.12.20
+- Fix: The "Start Fingerprinting" button in Settings let a user re-trigger
+  fingerprint generation while a run was already queued or in progress --
+  most visibly after refreshing the page mid-run, which lost the
+  in-memory "Started" state and re-enabled the button. It now checks the
+  job queue for an active fingerprint_generation job (queued, running, or
+  stopping) whenever the section renders and shows a disabled
+  "Fingerprinting in Progress" button in that case, so the stale state
+  can't come back from a refresh or tab switch.
+
 ## 2026-08-17
 
 ### 0.12.19
