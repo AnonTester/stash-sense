@@ -48,6 +48,9 @@
     async startFingerprintGeneration() {
       return apiCall('queue_submit', { type: 'fingerprint_generation' });
     },
+    async getFingerprintJobs() {
+      return apiCall('queue_list', { type: 'fingerprint_generation' });
+    },
     async checkUpdate() {
       return apiCall('db_check_update');
     },
@@ -459,11 +462,16 @@
     const fingerprintStatsEl = section.querySelector('.ss-id-database-stats-fingerprint');
 
     try {
-      const [fpStatus, dbInfo, updateInfo] = await Promise.all([
+      const [fpStatus, dbInfo, updateInfo, fpJobs] = await Promise.all([
         SettingsAPI.getFingerprintStatus().catch(() => null),
         SettingsAPI.getDatabaseInfo().catch(() => null),
         SettingsAPI.checkUpdate().catch(() => null),
+        SettingsAPI.getFingerprintJobs().catch(() => null),
       ]);
+
+      const fpJobActive = !!(fpJobs && fpJobs.jobs || []).find(
+        j => j.status === 'queued' || j.status === 'running' || j.status === 'stopping'
+      );
 
       const fpCoverage = (fpStatus && fpStatus.complete_fingerprints) || 0;
       const totalScenes = fpStatus && fpStatus.total_scenes != null ? fpStatus.total_scenes : null;
@@ -528,8 +536,8 @@
           <span class="ss-db-stat-value">${missing.toLocaleString()}</span>
           <span class="ss-db-stat-label">Missing</span>
         </div>
-        <button class="ss-btn ss-btn-primary ss-btn-sm ss-start-fingerprinting-btn" id="ss-start-fingerprinting-btn">
-          Start Fingerprinting
+        <button class="ss-btn ss-btn-primary ss-btn-sm ss-start-fingerprinting-btn" id="ss-start-fingerprinting-btn" ${fpJobActive ? 'disabled' : ''}>
+          ${fpJobActive ? 'Fingerprinting in Progress' : 'Start Fingerprinting'}
         </button>
         ` : ''}
       `;
@@ -541,14 +549,17 @@
           startBtn.textContent = 'Starting…';
           try {
             await SettingsAPI.startFingerprintGeneration();
-            startBtn.textContent = 'Started — see Operations tab';
+            startBtn.textContent = 'Fingerprinting in Progress';
           } catch (e) {
             const msg = String(e.message || '');
-            startBtn.textContent = msg.includes('409') || msg.includes('already') ? 'Already Running' : 'Error';
-            setTimeout(() => {
-              startBtn.textContent = 'Start Fingerprinting';
-              startBtn.disabled = false;
-            }, 2500);
+            const alreadyRunning = msg.includes('409') || msg.includes('already');
+            startBtn.textContent = alreadyRunning ? 'Fingerprinting in Progress' : 'Error';
+            if (!alreadyRunning) {
+              setTimeout(() => {
+                startBtn.textContent = 'Start Fingerprinting';
+                startBtn.disabled = false;
+              }, 2500);
+            }
           }
         });
       }

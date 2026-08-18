@@ -507,9 +507,12 @@ FORCE_FULL_SCAN_USER_JOB_TYPES = {"scene_fingerprint_match", "upstream_scene_cha
 def handle_queue(mode, args, sidecar_url):
     """Handle queue-related proxy operations."""
     if mode == "queue_list":
-        qs = ""
+        params = []
         if args.get("status"):
-            qs += f"?status={args['status']}"
+            params.append(f"status={args['status']}")
+        if args.get("type"):
+            params.append(f"type={args['type']}")
+        qs = f"?{'&'.join(params)}" if params else ""
         return sidecar_get(sidecar_url, f"/queue{qs}")
     elif mode == "queue_status":
         return sidecar_get(sidecar_url, "/queue/status")
