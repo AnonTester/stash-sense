@@ -35,16 +35,26 @@ cd api && ../.venv/bin/python -m pytest tests/test_upstream_field_mapper.py -v
 cd api && make lint            # check only
 cd api && make lint-fix        # auto-fix
 
-# Deploy plugin to Unraid
-scp plugin/* root@10.0.0.4:/mnt/nvme_cache/appdata/stash/config/plugins/stash-sense/
-
-# Build and push Docker image
-docker build -t carrotwaxr/stash-sense:latest . && docker push carrotwaxr/stash-sense:latest
+# Deploy to the live sidecar + plugin (this fork's actual deployment —
+# a local Docker build on <stash-host>, not a registry push):
+scp api/<changed files> <stash-host>:/root/homeserver/stash-sense/api/
+scp plugin/<changed files> <stash-host>:/root/homeserver/stash-sense/plugin/
+ssh <stash-host> "cd /root/homeserver/stash-sense && sh rebuild.sh"
+# rebuild.sh rebuilds the stash-sense:local image AND copies plugin/* into
+# Stash's installed plugin dir. After it finishes, trigger a reloadPlugins
+# GraphQL mutation (or restart Stash) for the new version to show up in
+# Stash's Plugins page — rebuild.sh alone doesn't do that last step.
 ```
 
 Dev API at `http://localhost:5000`, docs at `http://localhost:5000/docs`. Requires `api/.env` with `STASH_API_KEY` and stash-box API keys.
 
 **Hot-reload caveat:** Background analysis tasks block uvicorn `--reload` on file changes — kill and restart the process.
+
+**Version bump — 4 locations, always together, every release:** `plugin/stash-sense-core.js` (`PLUGIN_VERSION`), `api/main.py` (FastAPI `app.version`), `api/settings_router.py` (`_version`), `plugin/stash-sense.yml` (`version:`). Missing even one is a real, recurring failure mode (caught repeatedly via a stale version showing in `/system/info` or `/health` after deploy) — verify all four read the same string before rebuilding, not just the ones you remember to touch.
+
+**Changelog** — `changelog.txt` at repo root. Reverse-chronological `## YYYY-MM-DD` date headers, each containing one or more `### x.y.z` version subsections with `- Fix:` / `- Improvement:` / `- Feature:` bullets. Every version bump gets an entry, even a one-line fix. When a genuinely new day starts, add a new `## YYYY-MM-DD` header rather than piling more versions under an old date.
+
+**Commit messages on this repo** — see Public Repository Policy above; the same rule applies to every commit regardless of how small. Multi-line messages with special characters (`--`, nested quotes) reliably break an inline `git commit -m "$(cat <<EOF ...)"` wrapped in an `ssh "..."` call — write the message to a local file and use `git commit -F <file>` instead. After any history rewrite (rebase, filter), re-verify the *current* branch tip's actual commits before trusting remembered hashes/content from earlier in a session — a rewrite changes commit hashes, and reasoning from stale ones silently checks the wrong thing.
 
 ## Architecture
 
@@ -54,7 +64,7 @@ Two components talking to one Stash instance:
 - **`plugin/`** — JS/CSS/Python injected into Stash web UI. All sidecar calls go through `stash_sense_backend.py` to bypass browser CSP.
 
 **Two databases:**
-- `performers.db` — Read-only, distributed via GitHub Releases. Face metadata, stash-box IDs, Voyager ANN indices.
+- `performers.db` — Read-only, distributed via GitHub Releases on `AnonTester/stash-sense-data`. Face metadata, stash-box IDs, Voyager ANN indices. Built and published by a **separate, private** repo — `stash-sense-data-gen` — which crawls stash-box endpoints, embeds new/changed faces, and cuts a dated release (full + delta zips) roughly biweekly via cron. This repo's `database_updater.py` is what checks that release repo for updates; it has no involvement in producing them. See `stash-sense-data-gen`'s own `CLAUDE.md` for that pipeline's deployment/scheduling/publishing details — don't duplicate that documentation here.
 - `stash_sense.db` — Read-write, user-local. Recommendations, watermarks, upstream snapshots, scene fingerprints. Schema version 9 (`recommendations_db.py`). Survives face DB updates.
 
 **Startup sequence (`main.py`):** Hardware detection → model manager init → ResourceManager registration (face recognition registered as *lazy*, not loaded) → recommendations DB init → settings system → StashBox connection manager → queue manager start. Face recognition loads on first `/identify` request.
@@ -77,6 +87,17 @@ Jobs run via `QueueManager` (`queue_manager.py`) with `JOB_REGISTRY` in `job_mod
 ### Duplicate Scene Detection
 Candidate generation via SQL joins + inverted indices (O(n) pairs, not O(n²)). Scored with signal hierarchy: stash-box ID match = 100%, face fingerprint ≤ 85%, metadata ≤ 60%. Diminishing returns: `primary + secondary × 0.3`.
 
+### Local Performer Database (dual-index identification)
+A second, much smaller Voyager index built from *this Stash instance's own* performer cover images (`local_performer_index.py`), queried alongside the main `performers.db` index during identification and merged into the same result list. Local candidates get their `combined_distance` multiplied by `LOCAL_MATCH_BOOST` (currently `0.85`, in `matching.py`) before merging — a face in the user's own library is more likely to be a performer they've already added than a random main-DB entry.
+
+**Requires both models to agree.** `fuse_local_results()` in `matching.py` only trusts a local candidate if *both* FaceNet and ArcFace ranked it — unlike the main index's `fuse_results()`, which tolerates a single-model match with a distance penalty (calibrated for ~450k candidates, where missing one model's top-K doesn't mean much). The local index only has ~1-2k candidates, so landing in just one model's top-K is common and weak evidence on its own; trusting it directly let a coincidental single-model agreement get boosted into a false high-confidence match in practice (confirmed live — see git history around the `LOCAL_MATCH_BOOST` fix for the concrete case). Don't relax this without re-deriving why it's there.
+
+**Sync mechanism**: a `local_performer_sync` job (`jobs/local_performer_sync_job.py`, manual or scheduled from Operations) does a full diff-and-embed pass. An optional `Performer.Create/Update/Destroy.Post` hook (off by default, Settings → Local Performers) keeps it current in near-real-time; failures queue to a local retry-cache file (`pending_local_sync.json` in the plugin dir) and flush on the next successful hook call. **Merging one performer into another fires no Stash hook at all** (confirmed empirically, not just assumed) — only the scheduled/manual sync job picks up a merge.
+
+**Image-change detection**: hash the fetched image *bytes*, not the `image_path` URL — Stash's cache-busting query param on that URL tracks `updated_at`, which changes on *any* field edit, not just a cover swap. Hashing the URL instead of the bytes was tried and reverted after it caused every unrelated performer edit to trigger a pointless re-embed.
+
+**Voyager gotcha**: `del index[id]` (mark-deleted) can raise `RuntimeError: already deleted` even immediately after `id in index` reported it present — a tombstone-state inconsistency that surfaces after a save()/load() round-trip, not a logic bug in the calling code. `LocalPerformerIndex.remove()` treats that specific error as a no-op.
+
 ## Conventions
 
 - **Logging:** Default level is WARNING. `logger.warning()` is user-visible; `logger.info()` is not.
@@ -85,6 +106,8 @@ Candidate generation via SQL joins + inverted indices (O(n) pairs, not O(n²)). 
 - **Local-only fields:** `favorite`, `rating`, `o_count` are Stash-local metadata — never compare against upstream StashBox values.
 - **Test marking:** ML/GPU tests are marked `@pytest.mark.heavy`. CI runs `make test-ci` which excludes them. `conftest.py` mocks ML modules so heavy-marked files can be collected without GPU.
 - **Background tasks:** Don't inherit shell activation. Use explicit venv python path for background processes.
+- **Never auto-select in Stash's own react-select fields from plugin JS after a mutation already succeeded.** If a performer/tag/etc. was just added via a direct GraphQL mutation, Stash's own field for that entity correctly *excludes* it from its own search suggestions (it's already selected server-side) — typing its name and confirming with Enter will pick whatever else matches instead, which can be a wrong, unrelated entity (confirmed live: a name/alias collision added a completely different performer to a scene). The mutation alone is sufficient; don't also try to fake a visual update via DOM simulation. If visual feedback matters, check the entity's own Save button (`.edit-button`, filter by text "Save"; its `disabled` state is the form's dirty flag) to decide whether it's safe to `window.location.reload()` (no unsaved changes) or whether to just show a message instead (unsaved changes present, don't touch the form).
+- **UI verification**: Chromium + Playwright are available for real visual verification of plugin changes (screenshot a scene/settings/operations page after a deploy) rather than assuming a UI change works. See whichever machine hosts the live container for the exact binary/cache paths — not fixed enough across environments to hardcode here.
 
 ## Field Name Mapping (Upstream Sync)
 
@@ -114,8 +137,11 @@ Translation: `recommendations_router.py:update_performer_fields()`
 - `api/resource_manager.py` — Lazy load / idle-unload for face recognition
 - `api/stash_client_unified.py` — Stash GraphQL client
 - `api/stashbox_client.py` — StashBox GraphQL client
+- `api/local_performer_index.py` — Local performer Voyager index (build/query/sync), see "Local Performer Database" above
+- `api/jobs/local_performer_sync_job.py` — Full diff-and-embed sync job for the local performer index
 - `plugin/stash-sense-recommendations.js` — Recommendations dashboard UI
 - `plugin/stash-sense-settings.js` — Settings and model management UI
 - `plugin/stash-sense-operations.js` — Operation queue UI
 - `plugin/stash-sense.css` — All styles
 - `plugin/stash_sense_backend.py` — Plugin backend proxy
+- `changelog.txt` (repo root) — every version bump gets an entry here; see "Version bump" and "Changelog" under Commands above
