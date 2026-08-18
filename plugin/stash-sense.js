@@ -286,9 +286,22 @@
         return modal;
       },
 
+      // Find the current entity edit form's Save button, if one is open.
+      // Stash shares this exact class/label across scene, image, and
+      // gallery edit tabs (also used by e.g. the Delete button, hence the
+      // text match). Its disabled state IS the form's dirty flag --
+      // Stash enables Save the moment there's an unsaved change and
+      // disables it again once saved/reverted. No Save button on the
+      // page at all means there's no open edit form to worry about.
+      _findSaveButton() {
+        return Array.from(document.querySelectorAll('.edit-button'))
+          .find((b) => /^save$/i.test((b.textContent || '').trim())) || null;
+      },
+
       // Show a small persistent banner at the top of the modal confirming
-      // the mutation succeeded and that an already-open scene/image edit
-      // form won't visually reflect it without a refresh.
+      // the mutation succeeded and that an already-open, unsaved edit
+      // form won't visually reflect it without a refresh (which would
+      // lose those unsaved edits, so this doesn't force one).
       //
       // This used to instead try to reflect the change directly in an
       // open edit form, by typing the performer's name into Stash's own
@@ -313,18 +326,33 @@
           notice.className = 'ss-refresh-notice';
           body.insertBefore(notice, body.firstChild);
         }
-        notice.textContent = 'Added. Refresh the page to see it reflected here if you have this scene/image open for editing.';
+        notice.textContent = 'Added. You have unsaved changes on this page, so refresh manually when ready to see this reflected here.';
       },
 
       async _finishMutation(modal, delayMs = 2200) {
-        this._showRefreshNotice(modal);
-        await new Promise((r) => setTimeout(r, delayMs));
-        if (modal && typeof modal._close === 'function') {
-          modal._close();
+        const saveBtn = this._findSaveButton();
+
+        if (saveBtn && !saveBtn.disabled) {
+          // Edit form open with unsaved changes -- don't reload (would
+          // lose them), just say a refresh is needed once ready.
+          this._showRefreshNotice(modal);
+          await new Promise((r) => setTimeout(r, delayMs));
+          if (modal && typeof modal._close === 'function') modal._close();
+          const active = document.activeElement;
+          if (active && typeof active.blur === 'function') active.blur();
+          return;
         }
-        // Nudge React forms that rely on focus/blur cycles.
-        const active = document.activeElement;
-        if (active && typeof active.blur === 'function') active.blur();
+
+        if (saveBtn) {
+          // Edit form open, no unsaved changes -- reload guarantees it
+          // now shows the current (correct) data, with none of the risk
+          // the old DOM-injection approach carried.
+          window.location.reload();
+          return;
+        }
+
+        // No edit form open at all -- nothing to refresh, just close.
+        if (modal && typeof modal._close === 'function') modal._close();
       },
 
       _withTimeout(promise, timeoutMs, timeoutMessage) {

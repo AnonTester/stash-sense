@@ -1,5 +1,15 @@
 ## 2026-08-18
 
+### 0.12.22
+- Improvement: The "refresh needed" banner added in 0.12.21 always showed,
+  even when there was no open edit form to refresh, or when there was one
+  open with no unsaved changes on it. Now checks the entity edit form's
+  own Save button (enabled = unsaved changes present) to decide: no edit
+  form open -- just close, nothing to refresh; open with no unsaved
+  changes -- reload automatically, so the added performer shows up right
+  away with zero risk; open with unsaved changes -- show the banner
+  instead of reloading, so those changes aren't lost.
+
 ### 0.12.21
 - Improvement: 0.12.18 removed an unsafe attempt to auto-select a
   newly-added performer in an already-open scene/image edit form (it
