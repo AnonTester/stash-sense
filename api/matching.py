@@ -406,6 +406,61 @@ def fuse_local_results(
     return list(candidates.values())
 
 
+# Endpoint short-name matching universal_id's own "<endpoint_domain>:<uuid>"
+# convention for StashDB entries (see stashbox_utils._extract_endpoint) --
+# local_performer_index.py only ever links against StashDB itself (its own
+# STASHDB_ENDPOINT is the full GraphQL URL, used solely to filter a
+# performer's stash_ids down to the StashDB one), so this is the only
+# endpoint a local candidate's tracked stashdb_id could ever correspond to.
+_STASHDB_ENDPOINT_SHORT_NAME = "stashdb.org"
+
+
+def merge_local_candidates(
+    main_matches: list[CandidateMatch],
+    local_candidates: list[CandidateMatch],
+    local_performers_mapping: dict[str, dict],
+) -> list[CandidateMatch]:
+    """Merges local-index candidates into the main-index results,
+    deduplicating a performer present in *both* databases instead of
+    returning two separate, weaker entries for the same real person.
+
+    local_performer_index.py already tracks each local performer's linked
+    StashDB id -- sync_one_performer() reads it straight off the
+    performer's own `stash_ids` in Stash -- but until now that linkage was
+    only ever used for display (recognizer.py's own id-selection logic for
+    the response), never to detect a duplicate against the main index's
+    own candidates. A performer who is both locally added *and* already in
+    the main database is a real, plausibly common case (anyone reasonably
+    well-known would be in both) -- without this, they come back as two
+    separate candidates for the same person: diluted evidence instead of
+    reinforced, and confusing to present as two different "top matches".
+
+    Only merges a genuine duplicate -- a local candidate whose linked
+    stashdb_id matches a `universal_id` already present in `main_matches`
+    *for this specific call*. A performer who exists in only one database
+    is returned unchanged: never dropped, never penalized, and never
+    summed/boosted into a double-counted score -- of the two duplicate
+    entries, only the single better-scoring one survives.
+    """
+    main_by_universal_id = {c.universal_id: c for c in main_matches}
+    merged: list[CandidateMatch] = list(main_matches)
+
+    for local_candidate in local_candidates:
+        local_id = local_candidate.universal_id.split(":", 1)[1]  # "local:<pid>" -> "<pid>"
+        stashdb_id = (local_performers_mapping.get(local_id) or {}).get("stashdb_id")
+        linked_universal_id = f"{_STASHDB_ENDPOINT_SHORT_NAME}:{stashdb_id}" if stashdb_id else None
+
+        main_entry = main_by_universal_id.get(linked_universal_id) if linked_universal_id else None
+        if main_entry is not None:
+            if local_candidate.combined_distance < main_entry.combined_distance:
+                merged[merged.index(main_entry)] = local_candidate
+            # else: main_entry already scored better -- keep it, drop the local duplicate silently
+        else:
+            merged.append(local_candidate)
+
+    return merged
+
+
 def match_face(
     facenet_embedding: np.ndarray,
     arcface_embedding: np.ndarray,
@@ -462,7 +517,7 @@ def match_face(
             local_candidates = fuse_local_results(
                 local_fn_result, local_af_result, local_performers_mapping, config,
             )
-            merged = result.matches + local_candidates
+            merged = merge_local_candidates(result.matches, local_candidates, local_performers_mapping)
             merged.sort(key=lambda c: c.combined_distance)
             result.matches = [c for c in merged if c.combined_distance <= config.max_distance][:config.max_results]
         except Exception as e:

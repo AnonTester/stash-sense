@@ -12,6 +12,8 @@ import pytest
 from matching import (
     check_model_health,
     fuse_results,
+    merge_local_candidates,
+    CandidateMatch,
     ModelHealth,
     ModelQueryResult,
     MatchingConfig,
@@ -173,3 +175,99 @@ class TestFuseResults:
         # Index 99 is out of bounds and should be skipped
         face_indices = [m.face_index for m in result.matches]
         assert 99 not in face_indices
+
+
+class TestMergeLocalCandidates:
+    """A local performer with a linked StashDB id who also shows up as a
+    main-index candidate must be merged into one entry, not returned as two
+    separate (weaker) candidates for the same real person -- see
+    merge_local_candidates()'s own docstring for the full rationale."""
+
+    def _main_match(self, universal_id, distance, name="Main"):
+        return CandidateMatch(
+            face_index=1, universal_id=universal_id, name=name, combined_distance=distance,
+        )
+
+    def _local_match(self, local_id, distance, name="Local"):
+        return CandidateMatch(
+            face_index=1, universal_id=f"local:{local_id}", name=name, combined_distance=distance,
+        )
+
+    def test_duplicate_merged_local_wins(self):
+        # Same real performer in both databases -- local candidate scored better.
+        main = [self._main_match("stashdb.org:uuid-1", distance=0.45)]
+        local = [self._local_match("7", distance=0.30)]
+        mapping = {"7": {"name": "Local", "stashdb_id": "uuid-1"}}
+
+        merged = merge_local_candidates(main, local, mapping)
+
+        assert len(merged) == 1
+        assert merged[0].combined_distance == pytest.approx(0.30)
+        assert merged[0].universal_id == "local:7"
+
+    def test_duplicate_merged_main_wins(self):
+        # Same real performer in both databases -- main-index candidate scored better.
+        main = [self._main_match("stashdb.org:uuid-1", distance=0.20)]
+        local = [self._local_match("7", distance=0.40)]
+        mapping = {"7": {"name": "Local", "stashdb_id": "uuid-1"}}
+
+        merged = merge_local_candidates(main, local, mapping)
+
+        assert len(merged) == 1
+        assert merged[0].combined_distance == pytest.approx(0.20)
+        assert merged[0].universal_id == "stashdb.org:uuid-1"
+
+    def test_local_only_performer_not_dropped_or_penalized(self):
+        # Locally-added performer with no StashDB link at all -- must survive untouched.
+        main = [self._main_match("stashdb.org:uuid-1", distance=0.30)]
+        local = [self._local_match("9", distance=0.35)]
+        mapping = {"9": {"name": "Local Only", "stashdb_id": None}}
+
+        merged = merge_local_candidates(main, local, mapping)
+
+        assert len(merged) == 2
+        assert {m.universal_id for m in merged} == {"stashdb.org:uuid-1", "local:9"}
+
+    def test_main_only_performer_not_dropped_or_penalized(self):
+        # A main-index performer with no local counterpart in this call's
+        # results at all -- must survive untouched too.
+        main = [self._main_match("stashdb.org:uuid-1", distance=0.30)]
+        local: list[CandidateMatch] = []
+        mapping: dict = {}
+
+        merged = merge_local_candidates(main, local, mapping)
+
+        assert merged == main
+
+    def test_linked_performer_not_in_this_calls_main_results_kept_separate(self):
+        # Local performer has a real StashDB link, but that performer's
+        # main-index face embedding didn't rank in this call's top
+        # candidates -- nothing to merge with, so the local candidate is
+        # kept as-is, not dropped.
+        main = [self._main_match("stashdb.org:uuid-OTHER", distance=0.30)]
+        local = [self._local_match("7", distance=0.35)]
+        mapping = {"7": {"name": "Local", "stashdb_id": "uuid-1"}}
+
+        merged = merge_local_candidates(main, local, mapping)
+
+        assert len(merged) == 2
+        assert {m.universal_id for m in merged} == {"stashdb.org:uuid-OTHER", "local:7"}
+
+    def test_multiple_local_candidates_mixed(self):
+        # One genuine duplicate, one local-only performer, in the same call.
+        main = [self._main_match("stashdb.org:uuid-1", distance=0.40)]
+        local = [
+            self._local_match("7", distance=0.25),   # duplicate of uuid-1, local wins
+            self._local_match("9", distance=0.50),   # local-only, no link
+        ]
+        mapping = {
+            "7": {"name": "Duplicate", "stashdb_id": "uuid-1"},
+            "9": {"name": "Local Only", "stashdb_id": None},
+        }
+
+        merged = merge_local_candidates(main, local, mapping)
+
+        assert len(merged) == 2
+        by_id = {m.universal_id: m for m in merged}
+        assert by_id["local:7"].combined_distance == pytest.approx(0.25)
+        assert by_id["local:9"].combined_distance == pytest.approx(0.50)
