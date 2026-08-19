@@ -70,7 +70,10 @@ class SearchPerformerResult(BaseModel):
 
 
 class CreatePerformerRequest(BaseModel):
-    scene_id: str
+    # Optional: omitted (or empty) when the caller is staging the performer
+    # into an already-open edit form instead of assigning it to the scene
+    # directly -- see the "Add performer to scene" guard below.
+    scene_id: Optional[str] = None
     endpoint: str
     stashdb_id: str
 
@@ -82,7 +85,8 @@ class CreatePerformerResponse(BaseModel):
 
 
 class LinkPerformerRequest(BaseModel):
-    scene_id: str
+    # Optional: same reasoning as CreatePerformerRequest.scene_id above.
+    scene_id: Optional[str] = None
     performer_id: str
     stash_ids: list[dict] = []
     update_metadata: bool = False
@@ -287,17 +291,19 @@ async def create_performer_from_stashbox(request: CreatePerformerRequest):
     data = await stash_client._execute(create_query, {"input": create_input}, priority=Priority.CRITICAL)
     new_performer = data["performerCreate"]
 
-    # 3. Add performer to scene
-    get_query = """
-    query GetScene($id: ID!) {
-        findScene(id: $id) { performers { id } }
-    }
-    """
-    scene_data = await stash_client._execute(get_query, {"id": request.scene_id})
-    current_ids = [p["id"] for p in scene_data["findScene"]["performers"]]
-    if new_performer["id"] not in current_ids:
-        current_ids.append(new_performer["id"])
-        await stash_client.update_scene_performers(request.scene_id, current_ids)
+    # 3. Add performer to scene, unless the caller is staging it into an
+    # already-open edit form instead (scene_id omitted in that case).
+    if request.scene_id:
+        get_query = """
+        query GetScene($id: ID!) {
+            findScene(id: $id) { performers { id } }
+        }
+        """
+        scene_data = await stash_client._execute(get_query, {"id": request.scene_id})
+        current_ids = [p["id"] for p in scene_data["findScene"]["performers"]]
+        if new_performer["id"] not in current_ids:
+            current_ids.append(new_performer["id"])
+            await stash_client.update_scene_performers(request.scene_id, current_ids)
 
     return CreatePerformerResponse(
         performer_id=new_performer["id"],
@@ -315,17 +321,19 @@ async def link_performer_to_scene(request: LinkPerformerRequest):
     from stash_client_unified import StashClientUnified
     stash_client = StashClientUnified(_stash_url, _stash_api_key)
 
-    # Add performer to scene
-    get_query = """
-    query GetScene($id: ID!) {
-        findScene(id: $id) { performers { id } }
-    }
-    """
-    scene_data = await stash_client._execute(get_query, {"id": request.scene_id})
-    current_ids = [p["id"] for p in scene_data["findScene"]["performers"]]
-    if request.performer_id not in current_ids:
-        current_ids.append(request.performer_id)
-        await stash_client.update_scene_performers(request.scene_id, current_ids)
+    # Add performer to scene, unless the caller is staging it into an
+    # already-open edit form instead (scene_id omitted in that case).
+    if request.scene_id:
+        get_query = """
+        query GetScene($id: ID!) {
+            findScene(id: $id) { performers { id } }
+        }
+        """
+        scene_data = await stash_client._execute(get_query, {"id": request.scene_id})
+        current_ids = [p["id"] for p in scene_data["findScene"]["performers"]]
+        if request.performer_id not in current_ids:
+            current_ids.append(request.performer_id)
+            await stash_client.update_scene_performers(request.scene_id, current_ids)
 
     # Optionally update performer's stash_ids
     if request.update_metadata and request.stash_ids:

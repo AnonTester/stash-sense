@@ -1,5 +1,33 @@
 ## 2026-08-18
 
+### 0.12.24
+- Fix: Adding a performer from the Identify modal while a scene/image/
+  gallery edit tab was open always mutated the entity directly via GraphQL,
+  even though that tab's own Save button resubmits its entire performer
+  list -- meaning a later Save could silently revert the addition. The
+  0.12.21/0.12.22 "refresh needed" banner was really just a symptom of this
+  same race. Now, whenever an edit tab is open (dirty or not), the
+  performer is instead staged into that tab's own Performers field, the
+  same field Save already reads from, so it's included on the next Save
+  and can be removed again there if it's wrong. Selection is verified
+  against the performer's real Stash ID (read from the option's own
+  `/performers/{id}` link) before it's clicked -- never a bare name/Enter
+  match -- which is what protects against picking the wrong performer on
+  an alias/disambiguation collision, especially for single-name performers.
+  The refresh banner is gone; when no edit tab is open, the page now
+  reloads automatically after the direct mutation (previously it didn't
+  reload in that case at all, leaving the Details-tab cover stale).
+  Also fixes a related latent bug this change would otherwise have made
+  much worse: the "is an edit tab open" check only looked for a Save
+  button anywhere in the DOM, but Stash's tabs (Details/Edit/Markers/...)
+  stay mounted after switching away -- so once a scene's Edit tab had
+  been visited even once, its now-hidden Save button kept being found
+  from every other tab for the rest of the page's lifetime. Confirmed
+  live: this caused an add clicked from the Details tab to silently
+  stage into the hidden, inactive Edit tab instead of mutating directly,
+  with no visible feedback at all. The check now also requires the Save
+  button to actually be visible (`offsetParent !== null`).
+
 ### 0.12.23
 - Fix: The "Start Fingerprinting" button in Settings let a user re-trigger
   fingerprint generation while a run was already queued or in progress --

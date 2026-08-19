@@ -291,68 +291,150 @@
       // gallery edit tabs (also used by e.g. the Delete button, hence the
       // text match). Its disabled state IS the form's dirty flag --
       // Stash enables Save the moment there's an unsaved change and
-      // disables it again once saved/reverted. No Save button on the
-      // page at all means there's no open edit form to worry about.
+      // disables it again once saved/reverted. No *visible* Save button
+      // means there's no open edit form to worry about.
+      //
+      // offsetParent !== null is required, not optional: Stash's tabs
+      // (Details/Edit/Markers/...) use react-bootstrap Tab.Pane, which
+      // stays mounted in the DOM after switching away from it -- only its
+      // `active`/`show` classes toggle (display: none otherwise).
+      // Confirmed live: after ever visiting a scene's Edit tab, its Save
+      // button remains findable (and its own performer_ids field
+      // selectable) via querySelector from any other tab of that same
+      // page for the rest of the page's lifetime, unless this check is
+      // here -- which silently staged an add into that hidden, inactive
+      // form instead of mutating directly while the user was looking at
+      // the Details tab, with zero visible feedback.
       _findSaveButton() {
         return Array.from(document.querySelectorAll('.edit-button'))
-          .find((b) => /^save$/i.test((b.textContent || '').trim())) || null;
+          .find((b) => /^save$/i.test((b.textContent || '').trim()) && b.offsetParent !== null) || null;
       },
 
-      // Show a small persistent banner at the top of the modal confirming
-      // the mutation succeeded and that an already-open, unsaved edit
-      // form won't visually reflect it without a refresh (which would
-      // lose those unsaved edits, so this doesn't force one).
+      // Close the results modal after an add-performer action completes.
       //
-      // This used to instead try to reflect the change directly in an
-      // open edit form, by typing the performer's name into Stash's own
-      // react-select field and pressing Enter to confirm whatever
-      // suggestion that landed on. That was unsafe: the mutation already
-      // adds the performer server-side, so by the time this runs,
-      // react-select's own "already selected" filtering excludes them
-      // from their own suggestion list -- meaning Enter would confirm
-      // some *other* unrelated suggestion instead. Confirmed live: typing
-      // a newly-added performer's exact name surfaced a same-named-alias
-      // performer as the top (and only sensible) remaining match, and
-      // pressing Enter added *that* performer to the scene instead of a
-      // no-op. The mutation itself is correct and already saved -- the
-      // honest fix is telling the user a refresh is needed to see it, not
-      // trying to fake it via more DOM tricks.
-      _showRefreshNotice(modal) {
-        const body = modal?.querySelector('.ss-modal-body');
-        if (!body) return;
-        let notice = body.querySelector('.ss-refresh-notice');
-        if (!notice) {
-          notice = document.createElement('div');
-          notice.className = 'ss-refresh-notice';
-          body.insertBefore(notice, body.firstChild);
+      // Whether this reloads the page depends on how the performer was
+      // actually added, decided by the caller and passed in as `staged`:
+      //
+      // - staged: false -- no edit tab was open, so the caller mutated the
+      //   scene/image/gallery directly via GraphQL. That's already saved
+      //   server-side and there's no open form with unsaved edits to lose,
+      //   so reloading is both safe and necessary -- it's the only way the
+      //   Details-tab view (cover image, performer list) picks up the
+      //   change.
+      // - staged: true -- an edit tab was open, so the caller staged the
+      //   performer into the form's own PerformerSelect field instead of
+      //   mutating directly (see _selectPerformerInPendingForm). Reloading
+      //   here would discard that pending edit -- and any other unsaved
+      //   edits on the form -- so this just closes the modal and leaves
+      //   the user to review/Save (or remove it again) themselves.
+      //
+      // This used to instead mutate directly in both cases and try to
+      // reconcile the open form afterwards (first by typing the
+      // performer's name into react-select and pressing Enter -- unsafe,
+      // since the mutation already excluded them from their own
+      // suggestion list, so Enter could confirm an unrelated same-named
+      // performer instead; then by showing a "refresh manually" banner).
+      // Both were symptoms of the same root problem: mutating while a form
+      // is open racing against that form's own eventual Save, which
+      // resubmits its whole performer_ids list and silently reverts
+      // anything added out-of-band. Staging into the form itself removes
+      // the race entirely.
+      async _finishMutation(modal, { staged = false } = {}) {
+        if (staged) {
+          if (modal && typeof modal._close === 'function') modal._close();
+          return;
         }
-        notice.textContent = 'Added. You have unsaved changes on this page, so refresh manually when ready to see this reflected here.';
+        window.location.reload();
       },
 
-      async _finishMutation(modal, delayMs = 2200) {
-        const saveBtn = this._findSaveButton();
+      _setNativeInputValue(input, value) {
+        const proto = Object.getPrototypeOf(input);
+        const desc = Object.getOwnPropertyDescriptor(proto, 'value')
+          || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+        if (desc?.set) {
+          desc.set.call(input, value);
+        } else {
+          input.value = value;
+        }
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      },
 
-        if (saveBtn && !saveBtn.disabled) {
-          // Edit form open with unsaved changes -- don't reload (would
-          // lose them), just say a refresh is needed once ready.
-          this._showRefreshNotice(modal);
-          await new Promise((r) => setTimeout(r, delayMs));
-          if (modal && typeof modal._close === 'function') modal._close();
-          const active = document.activeElement;
-          if (active && typeof active.blur === 'function') active.blur();
-          return;
+      // Stage a performer into the currently-open Scene/Image/Gallery edit
+      // form's own Performers field, instead of mutating the entity
+      // directly. Used whenever an edit tab is open (see _findSaveButton)
+      // -- see _finishMutation's comment for why a direct mutation is
+      // unsafe in that case.
+      //
+      // Stash's Scene/Image/Gallery edit panels all render this field via
+      // renderField("performer_ids", ...), which wraps it in
+      // `<Form.Group data-field="performer_ids">` -- a reliable,
+      // version-stable anchor (confirmed against Stash's own source), so
+      // this doesn't need the old heuristic multi-field scoring approach.
+      //
+      // Query preference: the performer's StashBox UUID if we have one
+      // (Stash's PerformerSelect runs an exact server-side stash_id match
+      // for UUID-shaped input, so this can't land on a same-named/aliased
+      // performer), falling back to their name otherwise. Either way, the
+      // option actually clicked is verified against the performer's real
+      // local Stash ID first -- parsed from the option's own
+      // `/performers/{id}` link -- and never just trusted from typing a
+      // name and hitting Enter. That's what protects against alias /
+      // disambiguation collisions (confirmed live: this happened with a
+      // single-name performer, the exact failure mode this guards
+      // against).
+      //
+      // Returns false (and leaves the field's typed text cleared) if no
+      // query produces a verified match -- callers must NOT fall back to
+      // a direct mutation in that case, since it could still be reverted
+      // by the form's own next Save.
+      async _selectPerformerInPendingForm(performerId, { name, stashdbId } = {}) {
+        const container = document.querySelector('[data-field="performer_ids"]');
+        if (!container) return false;
+        const input = container.querySelector('input');
+        if (!input) return false;
+
+        const queries = [stashdbId, name].filter(Boolean);
+        for (const query of queries) {
+          if (await this._tryVerifiedSelect(container, input, query, performerId)) {
+            return true;
+          }
+        }
+        this._setNativeInputValue(input, '');
+        return false;
+      },
+
+      async _tryVerifiedSelect(container, input, query, performerId) {
+        input.focus();
+        this._setNativeInputValue(input, query);
+
+        // Options load async (debounced, plus a GraphQL round trip) --
+        // poll for them rather than a fixed sleep.
+        const deadline = Date.now() + 4000;
+        let match = null;
+        while (Date.now() < deadline && !match) {
+          await new Promise((r) => setTimeout(r, 120));
+          const options = container.querySelectorAll('.react-select__option');
+          for (const opt of options) {
+            const link = opt.querySelector('a[href^="/performers/"]');
+            const idMatch = link?.getAttribute('href')?.match(/\/performers\/(\d+)/);
+            if (idMatch && idMatch[1] === String(performerId)) {
+              match = opt;
+              break;
+            }
+          }
         }
 
-        if (saveBtn) {
-          // Edit form open, no unsaved changes -- reload guarantees it
-          // now shows the current (correct) data, with none of the risk
-          // the old DOM-injection approach carried.
-          window.location.reload();
-          return;
+        if (!match) {
+          this._setNativeInputValue(input, '');
+          return false;
         }
 
-        // No edit form open at all -- nothing to refresh, just close.
-        if (modal && typeof modal._close === 'function') modal._close();
+        const opts = { bubbles: true, cancelable: true, button: 0 };
+        match.dispatchEvent(new MouseEvent('mousedown', opts));
+        match.dispatchEvent(new MouseEvent('mouseup', opts));
+        match.dispatchEvent(new MouseEvent('click', opts));
+        await new Promise((r) => setTimeout(r, 150));
+        return true;
       },
 
       _withTimeout(promise, timeoutMs, timeoutMessage) {
@@ -471,17 +553,29 @@
         resultsDiv.querySelectorAll('.ss-btn-add').forEach(btn => {
           btn.addEventListener('click', async (e) => {
             const performerId = btn.dataset.performerId;
+            const performerName = btn.dataset.performerName;
+            const stashdbId = btn.dataset.stashdbId;
             const targetSceneId = btn.dataset.sceneId;
             btn.disabled = true;
             btn.textContent = 'Adding...';
 
-            const success = await this.addPerformerToScene(targetSceneId, performerId);
+            // An open edit tab's own Save resubmits its whole
+            // performer_ids list -- mutating the scene directly here
+            // would just get silently reverted by that. Stage into the
+            // form instead when one is open; only mutate directly
+            // otherwise. See _finishMutation's comment for the full
+            // reasoning.
+            const staged = !!this._findSaveButton();
+            const success = staged
+              ? await this._selectPerformerInPendingForm(performerId, { name: performerName, stashdbId })
+              : await this.addPerformerToScene(targetSceneId, performerId);
+
             if (success) {
-              btn.textContent = 'Added!';
+              btn.textContent = staged ? 'Added to form' : 'Added!';
               btn.classList.add('ss-btn-success');
-              await this._finishMutation(modal);
+              await this._finishMutation(modal, { staged });
             } else {
-              btn.textContent = 'Failed';
+              btn.textContent = staged ? 'Could not add automatically' : 'Failed';
               btn.classList.add('ss-btn-error');
               btn.disabled = false;
             }
@@ -496,13 +590,18 @@
             btn.disabled = true;
             btn.textContent = 'Creating...';
 
+            const staged = !!this._findSaveButton();
+
             try {
               const settings = await SS.getSettings();
               const result = await this._withTimeout(
                 SS.runPluginOperation('create_performer_from_stashbox', {
                   endpoint,
                   stashdb_id: stashdbId,
-                  scene_id: targetSceneId,
+                  // Omitted (not just empty) when staged -- the backend
+                  // only skips its own scene-assignment step when this key
+                  // is entirely absent/falsy.
+                  ...(staged ? {} : { scene_id: targetSceneId }),
                   sidecar_url: settings.sidecarUrl,
                 }),
                 45000,
@@ -511,9 +610,20 @@
 
               if (result.error) throw new Error(result.error);
 
-              btn.textContent = 'Added!';
-              btn.classList.add('ss-btn-success');
-              await this._finishMutation(modal);
+              const success = staged
+                ? await this._selectPerformerInPendingForm(result.performer_id, { name: result.name, stashdbId })
+                : true;
+
+              if (success) {
+                btn.textContent = staged ? 'Created — added to form' : 'Added!';
+                btn.classList.add('ss-btn-success');
+                await this._finishMutation(modal, { staged });
+              } else {
+                // Performer was created in the library either way -- just
+                // couldn't be verified-selected into the open form.
+                btn.textContent = 'Created — add manually';
+                btn.classList.add('ss-btn-error');
+              }
             } catch (err) {
               // Fallback: if the plugin call timed out but performer creation
               // actually succeeded, complete UI flow anyway.
@@ -522,10 +632,17 @@
                   const graphqlUrl = this._stashboxGraphqlUrl(endpoint);
                   const localPerformer = await SS.findPerformerByStashDBId(stashdbId, graphqlUrl);
                   if (localPerformer?.id) {
-                    await this.addPerformerToScene(targetSceneId, localPerformer.id);
-                    btn.textContent = 'Added!';
-                    btn.classList.add('ss-btn-success');
-                    await this._finishMutation(modal);
+                    const success = staged
+                      ? await this._selectPerformerInPendingForm(localPerformer.id, { name: localPerformer.name, stashdbId })
+                      : await this.addPerformerToScene(targetSceneId, localPerformer.id);
+                    if (success) {
+                      btn.textContent = staged ? 'Created — added to form' : 'Added!';
+                      btn.classList.add('ss-btn-success');
+                      await this._finishMutation(modal, { staged });
+                      return;
+                    }
+                    btn.textContent = 'Created — add manually';
+                    btn.classList.add('ss-btn-error');
                     return;
                   }
                 } catch (recoveryErr) {
@@ -636,7 +753,11 @@
           actionsHtml = `<span class="ss-local-status ss-already-tagged">Already tagged on scene</span>`;
         } else if (localPerformer) {
           actionsHtml = `
-            <button class="ss-btn ss-btn-add" data-performer-id="${localPerformer.id}" data-scene-id="${sceneId}">
+            <button class="ss-btn ss-btn-add"
+                    data-performer-id="${localPerformer.id}"
+                    data-performer-name="${SS.escapeHtml ? SS.escapeHtml(localPerformer.name) : localPerformer.name}"
+                    data-stashdb-id="${match.stashdb_id || ''}"
+                    data-scene-id="${sceneId}">
               Add to Scene
             </button>
             <span class="ss-local-status">In library as: ${localPerformer.name}</span>`;
@@ -705,7 +826,11 @@
               altActionsHtml = `<span class="ss-local-status ss-already-tagged">Already tagged</span>`;
             } else if (altLocalPerformer) {
               altActionsHtml = `
-                <button class="ss-btn ss-btn-add ss-btn-sm" data-performer-id="${altLocalPerformer.id}" data-scene-id="${sceneId}">
+                <button class="ss-btn ss-btn-add ss-btn-sm"
+                        data-performer-id="${altLocalPerformer.id}"
+                        data-performer-name="${SS.escapeHtml ? SS.escapeHtml(altLocalPerformer.name) : altLocalPerformer.name}"
+                        data-stashdb-id="${m.stashdb_id || ''}"
+                        data-scene-id="${sceneId}">
                   Add to Scene
                 </button>
                 <span class="ss-local-status">In library as: ${altLocalPerformer.name}</span>`;
@@ -840,6 +965,7 @@
                   const performerId = li.dataset.performerId;
                   const performerName = li.dataset.performerName;
                   const updateMeta = updateMetaCheckbox.checked;
+                  const staged = !!self._findSaveButton();
 
                   panel.innerHTML = '<div class="ss-search-loading">Linking...</div>';
 
@@ -847,7 +973,9 @@
                     const stashIds = updateMeta ? [{ endpoint: graphqlUrl, stash_id: stashdbId }] : [];
                     const settings = await SS.getSettings();
                     const linkResult = await SS.runPluginOperation('link_performer_stashbox', {
-                      scene_id: sceneId,
+                      // Omitted (not just empty) when staged -- see the
+                      // "Add to Stash + Scene" handler above for why.
+                      ...(staged ? {} : { scene_id: sceneId }),
                       performer_id: performerId,
                       stash_ids: stashIds,
                       update_metadata: updateMeta,
@@ -855,6 +983,15 @@
                     });
 
                     if (linkResult.error) throw new Error(linkResult.error);
+
+                    // A UUID search only has something to find once the
+                    // stash_id link above has actually been written.
+                    const success = staged
+                      ? await self._selectPerformerInPendingForm(performerId, {
+                          name: performerName,
+                          stashdbId: updateMeta ? stashdbId : undefined,
+                        })
+                      : true;
 
                     if (panel._cleanup) panel._cleanup();
                     panel.remove();
@@ -865,11 +1002,18 @@
                     // Update status text
                     const notInLib = triggerBtn.closest('.ss-actions, .ss-alt-match-actions')?.querySelector('.ss-not-in-library');
                     if (notInLib) {
-                      notInLib.textContent = `Added as: ${performerName}`;
+                      notInLib.textContent = success
+                        ? `Added as: ${performerName}`
+                        : `Linked as: ${performerName} (add to form manually)`;
                       notInLib.classList.remove('ss-not-in-library');
                     }
+                    // Note: staged here reflects whether an edit tab was
+                    // open (so a reload would risk losing unsaved edits),
+                    // not whether the verified-select itself succeeded --
+                    // a failed select still leaves an open form's other
+                    // pending edits in place, which a reload would lose.
                     const modal = triggerBtn.closest('#ss-modal');
-                    await self._finishMutation(modal);
+                    await self._finishMutation(modal, { staged });
                   } catch (err) {
                     panel.innerHTML = `<div class="ss-search-error">Failed: ${SS.escapeHtml(err.message)}</div>`;
                     console.error('Failed to link performer:', err);
@@ -1044,7 +1188,11 @@
                   </div>
                   <div class="ss-actions">
                     ${localPerformer
-                      ? `<button class="ss-btn ss-btn-add" data-performer-id="${localPerformer.id}" data-image-id="${imageId}">
+                      ? `<button class="ss-btn ss-btn-add"
+                                 data-performer-id="${localPerformer.id}"
+                                 data-performer-name="${SS.escapeHtml ? SS.escapeHtml(localPerformer.name) : localPerformer.name}"
+                                 data-stashdb-id="${match.stashdb_id || ''}"
+                                 data-image-id="${imageId}">
                            Add to Image
                          </button>
                          <span class="ss-local-status">In library as: ${localPerformer.name}</span>`
@@ -1084,7 +1232,11 @@
                       </div>
                       <div class="ss-actions ss-alt-match-actions">
                         ${altLocalPerformer
-                          ? `<button class="ss-btn ss-btn-add ss-btn-sm" data-performer-id="${altLocalPerformer.id}" data-image-id="${imageId}">
+                          ? `<button class="ss-btn ss-btn-add ss-btn-sm"
+                                     data-performer-id="${altLocalPerformer.id}"
+                                     data-performer-name="${SS.escapeHtml ? SS.escapeHtml(altLocalPerformer.name) : altLocalPerformer.name}"
+                                     data-stashdb-id="${m.stashdb_id || ''}"
+                                     data-image-id="${imageId}">
                                Add to Image
                              </button>
                              <span class="ss-local-status">In library as: ${altLocalPerformer.name}</span>`
@@ -1108,17 +1260,23 @@
         resultsDiv.querySelectorAll('.ss-btn-add').forEach(btn => {
           btn.addEventListener('click', async (e) => {
             const performerId = btn.dataset.performerId;
+            const performerName = btn.dataset.performerName;
+            const stashdbId = btn.dataset.stashdbId;
             const targetImageId = btn.dataset.imageId;
             btn.disabled = true;
             btn.textContent = 'Adding...';
 
-            const success = await this.addPerformerToImage(targetImageId, performerId);
+            const staged = !!this._findSaveButton();
+            const success = staged
+              ? await this._selectPerformerInPendingForm(performerId, { name: performerName, stashdbId })
+              : await this.addPerformerToImage(targetImageId, performerId);
+
             if (success) {
-              btn.textContent = 'Added!';
+              btn.textContent = staged ? 'Added to form' : 'Added!';
               btn.classList.add('ss-btn-success');
-              await this._finishMutation(modal);
+              await this._finishMutation(modal, { staged });
             } else {
-              btn.textContent = 'Failed';
+              btn.textContent = staged ? 'Could not add automatically' : 'Failed';
               btn.classList.add('ss-btn-error');
               btn.disabled = false;
             }
@@ -1395,6 +1553,8 @@
                     <div class="ss-actions">
                       <button class="ss-btn ss-btn-add ss-gallery-accept-btn"
                               data-performer-id="${localPerformer.id}"
+                              data-performer-name="${SS.escapeHtml ? SS.escapeHtml(localPerformer.name) : localPerformer.name}"
+                              data-stashdb-id="${performer.performer_id || ''}"
                               data-gallery-id="${galleryId}"
                               data-image-ids='${JSON.stringify(performer.image_ids)}'>
                         Add to Gallery
@@ -1418,6 +1578,8 @@
 
         const runGalleryAccept = async (btn, deferFinish = false) => {
           const performerId = btn.dataset.performerId;
+          const performerName = btn.dataset.performerName;
+          const stashdbId = btn.dataset.stashdbId;
           const targetGalleryId = btn.dataset.galleryId;
           let imageIds;
           try {
@@ -1431,7 +1593,13 @@
           btn.disabled = true;
           btn.textContent = 'Adding...';
 
-          let success = await this.addPerformerToGallery(targetGalleryId, performerId);
+          // Only the gallery-level add needs the staged/direct branch --
+          // no Image edit form can be open while viewing gallery results,
+          // so per-image tagging below always mutates directly.
+          const staged = !!this._findSaveButton();
+          let success = staged
+            ? await this._selectPerformerInPendingForm(performerId, { name: performerName, stashdbId })
+            : await this.addPerformerToGallery(targetGalleryId, performerId);
 
           if (success && tagImages) {
             btn.textContent = 'Tagging images...';
@@ -1441,13 +1609,15 @@
           }
 
           if (success) {
-            btn.textContent = tagImages ? `Added to gallery + ${imageIds.length} images` : 'Added to gallery!';
+            btn.textContent = tagImages
+              ? `${staged ? 'Added to form' : 'Added to gallery'} + ${imageIds.length} images`
+              : (staged ? 'Added to form' : 'Added to gallery!');
             btn.classList.add('ss-btn-success');
             if (!deferFinish && !bulkAcceptInProgress) {
-              await this._finishMutation(modal);
+              await this._finishMutation(modal, { staged });
             }
           } else {
-            btn.textContent = 'Failed';
+            btn.textContent = staged ? 'Could not add automatically' : 'Failed';
             btn.classList.add('ss-btn-error');
             btn.disabled = false;
           }
@@ -1469,6 +1639,7 @@
           acceptAllBtn.textContent = 'Accepting...';
           bulkAcceptInProgress = true;
 
+          const staged = !!this._findSaveButton();
           let successCount = 0;
           const buttons = Array.from(resultsDiv.querySelectorAll('.ss-gallery-accept-btn:not(:disabled)'));
           for (const btn of buttons) {
@@ -1482,7 +1653,7 @@
           if (successCount > 0) {
             acceptAllBtn.textContent = `Accepted ${successCount}`;
             acceptAllBtn.classList.add('ss-btn-success');
-            await this._finishMutation(modal);
+            await this._finishMutation(modal, { staged });
           } else {
             acceptAllBtn.textContent = 'No changes applied';
             acceptAllBtn.classList.add('ss-btn-error');
