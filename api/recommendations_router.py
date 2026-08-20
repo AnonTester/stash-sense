@@ -204,6 +204,14 @@ def load_face_signal_cache(scene_id: int) -> list[dict]:
     return rec_db.get_face_embeddings(scene_id)
 
 
+def append_face_signal_cache(scene_id: int, faces: list[dict]) -> None:
+    """Add extra cached face rows (e.g. sprite-derived, frame_index=-2)
+    without replacing existing video-frame/screenshot rows."""
+    if rec_db is None:
+        return
+    rec_db.append_face_embeddings(scene_id, faces)
+
+
 def save_tattoo_signal_cache(scene_id: int, tattoos: list[dict]) -> None:
     if rec_db is None:
         return
@@ -1511,6 +1519,36 @@ async def get_fingerprint_status():
         current_version_count=stats.get("current_version_count"),
         needs_refresh_count=stats.get("needs_refresh_count"),
         total_scenes=total_scenes,
+    )
+
+
+class SceneFingerprintCheckResponse(BaseModel):
+    """Response for the per-scene fingerprint existence check."""
+    exists: bool
+    status: Optional[str] = None
+    frames_analyzed: Optional[int] = None
+    total_faces: Optional[int] = None
+    db_version: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+@router.get("/fingerprints/scene/{scene_id}", response_model=SceneFingerprintCheckResponse)
+async def get_scene_fingerprint_status(scene_id: int):
+    """Check whether a single scene has been fingerprinted yet -- used by
+    the scene page's "Identify full video" flow to decide whether to
+    prompt the user to fingerprint before identifying."""
+    db = get_rec_db()
+    fp = db.get_scene_fingerprint(scene_id)
+    if not fp:
+        return SceneFingerprintCheckResponse(exists=False)
+
+    return SceneFingerprintCheckResponse(
+        exists=True,
+        status=fp.get("fingerprint_status"),
+        frames_analyzed=fp.get("frames_analyzed"),
+        total_faces=fp.get("total_faces"),
+        db_version=fp.get("db_version"),
+        updated_at=fp.get("updated_at"),
     )
 
 

@@ -22,3 +22,10 @@ CLUSTER_THRESHOLD = 0.6   # Cosine distance threshold for face clustering
 # Fusion weights (when both models are healthy)
 FACENET_WEIGHT = 0.5      # FaceNet contribution (tuned 2026-02-12 re-eval)
 ARCFACE_WEIGHT = 0.5      # ArcFace contribution (tuned 2026-02-12 re-eval)
+
+# Sprite-sheet identification. A sprite tile (~160x90px) is far smaller than
+# an ffmpeg-extracted frame (e.g. 1920x1080) -- ~144x fewer pixels -- and
+# costs no decode/seek, so unlike NUM_FRAMES this isn't tuned as a
+# cost/accuracy tradeoff: default to processing every tile the sheet has,
+# capped only to bound pathologically long videos with very large sheets.
+SPRITE_MAX_FRAMES = 300

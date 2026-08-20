@@ -1718,6 +1718,34 @@ class RecommendationsDB:
                 ],
             )
 
+    def append_face_embeddings(self, stash_scene_id: int, faces: list[dict]) -> None:
+        """Insert additional cached face detections for a scene without
+        touching existing rows.
+
+        Used to merge in sprite-derived faces (frame_index=-2 sentinel,
+        alongside the -1 sentinel already used for screenshot faces) after
+        a scene's video-frame rows were already cached, so a later
+        `use_sprite` request doesn't force `replace_face_embeddings` to
+        re-run the (expensive) video-frame extraction just to add sprite
+        coverage. Same row shape as `replace_face_embeddings`.
+        """
+        if not faces:
+            return
+        with self._connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO scene_face_embeddings (
+                    stash_scene_id, frame_index, bbox_json, confidence, yaw,
+                    facenet_vector, arcface_vector
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (stash_scene_id, f["frame_index"], json.dumps(f["bbox"]), f["confidence"],
+                     f.get("yaw"), f["facenet_vector"], f["arcface_vector"])
+                    for f in faces
+                ],
+            )
+
     def get_tattoo_embeddings(self, stash_scene_id: int) -> list[dict]:
         with self._connection() as conn:
             rows = conn.execute(
