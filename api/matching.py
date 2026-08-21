@@ -302,8 +302,20 @@ def fuse_results(
         # Convert distance to confidence (0-1, higher is better)
         candidate.confidence = max(0.0, min(1.0, 1.0 - candidate.combined_distance))
 
+    # The index can hold multiple embedding entries for the same performer
+    # (e.g. several training crops from the crawler), each landing as its
+    # own idx-keyed candidate above -- left alone, the same person can
+    # surface twice (or more) in the returned list at similar scores.
+    # Collapse to one candidate per resolved identity, keeping the
+    # best-scoring entry, before sorting/truncating to max_results.
+    best_by_uid: dict[str, CandidateMatch] = {}
+    for candidate in candidates.values():
+        existing = best_by_uid.get(candidate.universal_id)
+        if existing is None or candidate.combined_distance < existing.combined_distance:
+            best_by_uid[candidate.universal_id] = candidate
+
     # Sort by combined distance and filter
-    sorted_candidates = sorted(candidates.values(), key=lambda c: c.combined_distance)
+    sorted_candidates = sorted(best_by_uid.values(), key=lambda c: c.combined_distance)
     filtered = [c for c in sorted_candidates if c.combined_distance <= config.max_distance]
     final = filtered[:config.max_results]
 

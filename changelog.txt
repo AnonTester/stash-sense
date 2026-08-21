@@ -1,3 +1,17 @@
+## 2026-08-21
+
+### 0.13.1
+- Fix: The "Identify current frame" / "Select to identify" / image-identify
+  flows now show "Add to Stash + Scene" and "Add as..." buttons for a match
+  whose performer isn't yet in the local library, matching what "Identify
+  full video" already offered -- previously these flows showed a dead-end
+  "Not in library" label with no way to act on the match.
+- Fix: A performer with multiple embedding entries in the face database
+  (e.g. several training crops) could appear twice in the same face's
+  match list at similar-looking scores instead of being collapsed into one
+  candidate. Matches are now deduplicated by resolved performer identity
+  before results are returned.
+
 ## 2026-08-20
 
 ### 0.13.0

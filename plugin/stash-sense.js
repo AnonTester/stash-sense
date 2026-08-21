@@ -1726,7 +1726,19 @@
                            Add to Scene
                          </button>
                          <span class="ss-local-status">In library as: ${localPerformer.name}</span>`
-                      : `<span class="ss-local-status ss-not-in-library">Not in library</span>`
+                      : `<button class="ss-btn ss-btn-create"
+                                 data-endpoint="${imgEndpoint}"
+                                 data-stashdb-id="${match.stashdb_id}"
+                                 data-scene-id="${sceneId}">
+                           Add to Stash + Scene
+                         </button>
+                         <button class="ss-btn ss-btn-link-as"
+                                 data-endpoint="${imgEndpoint}"
+                                 data-stashdb-id="${match.stashdb_id}"
+                                 data-scene-id="${sceneId}">
+                           Add as...
+                         </button>
+                         <span class="ss-local-status ss-not-in-library">Not in library</span>`
                     }
                   </div>
                 </div>
@@ -1770,7 +1782,19 @@
                                Add to Scene
                              </button>
                              <span class="ss-local-status">In library as: ${altLocalPerformer.name}</span>`
-                          : `<span class="ss-local-status ss-not-in-library">Not in library</span>`
+                          : `<button class="ss-btn ss-btn-create ss-btn-sm"
+                                     data-endpoint="${altEp}"
+                                     data-stashdb-id="${m.stashdb_id}"
+                                     data-scene-id="${sceneId}">
+                               Add to Stash + Scene
+                             </button>
+                             <button class="ss-btn ss-btn-link-as ss-btn-sm"
+                                     data-endpoint="${altEp}"
+                                     data-stashdb-id="${m.stashdb_id}"
+                                     data-scene-id="${sceneId}">
+                               Add as...
+                             </button>
+                             <span class="ss-local-status ss-not-in-library">Not in library</span>`
                         }
                       </div>
                     </div>
@@ -1810,6 +1834,89 @@
               btn.classList.add('ss-btn-error');
               btn.disabled = false;
             }
+          });
+        });
+
+        // "Add to Stash + Scene" handlers
+        resultsDiv.querySelectorAll('.ss-btn-create').forEach(btn => {
+          btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const { endpoint, stashdbId, sceneId: targetSceneId } = btn.dataset;
+            btn.disabled = true;
+            btn.textContent = 'Creating...';
+
+            const staged = !!this._findSaveButton();
+
+            try {
+              const settings = await SS.getSettings();
+              const result = await this._withTimeout(
+                SS.runPluginOperation('create_performer_from_stashbox', {
+                  endpoint,
+                  stashdb_id: stashdbId,
+                  // Omitted (not just empty) when staged -- the backend
+                  // only skips its own scene-assignment step when this key
+                  // is entirely absent/falsy.
+                  ...(staged ? {} : { scene_id: targetSceneId }),
+                  sidecar_url: settings.sidecarUrl,
+                }),
+                45000,
+                'Create performer operation timed out',
+              );
+
+              if (result.error) throw new Error(result.error);
+
+              const success = staged
+                ? await this._selectPerformerInPendingForm(result.performer_id, { name: result.name, stashdbId })
+                : true;
+
+              if (success) {
+                btn.textContent = staged ? 'Created — added to form' : 'Added!';
+                btn.classList.add('ss-btn-success');
+                await this._finishMutation(modal, { staged });
+              } else {
+                // Performer was created in the library either way -- just
+                // couldn't be verified-selected into the open form.
+                btn.textContent = 'Created — add manually';
+                btn.classList.add('ss-btn-error');
+              }
+            } catch (err) {
+              // Fallback: if the plugin call timed out but performer creation
+              // actually succeeded, complete UI flow anyway.
+              if ((err?.message || '').toLowerCase().includes('timed out')) {
+                try {
+                  const graphqlUrl = this._stashboxGraphqlUrl(endpoint);
+                  const localPerformer = await SS.findPerformerByStashDBId(stashdbId, graphqlUrl);
+                  if (localPerformer?.id) {
+                    const success = staged
+                      ? await this._selectPerformerInPendingForm(localPerformer.id, { name: localPerformer.name, stashdbId })
+                      : await this.addPerformerToScene(targetSceneId, localPerformer.id);
+                    if (success) {
+                      btn.textContent = staged ? 'Created — added to form' : 'Added!';
+                      btn.classList.add('ss-btn-success');
+                      await this._finishMutation(modal, { staged });
+                      return;
+                    }
+                    btn.textContent = 'Created — add manually';
+                    btn.classList.add('ss-btn-error');
+                    return;
+                  }
+                } catch (recoveryErr) {
+                  console.warn('[Stash Sense] Timed out, recovery check failed:', recoveryErr);
+                }
+              }
+              btn.textContent = 'Failed';
+              btn.classList.add('ss-btn-error');
+              btn.disabled = false;
+              console.error('Failed to create performer:', err);
+            }
+          });
+        });
+
+        // "Add as..." handlers
+        resultsDiv.querySelectorAll('.ss-btn-link-as').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._openSearchPanel(btn);
           });
         });
 

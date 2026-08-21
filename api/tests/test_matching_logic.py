@@ -176,6 +176,22 @@ class TestFuseResults:
         face_indices = [m.face_index for m in result.matches]
         assert 99 not in face_indices
 
+    def test_duplicate_performer_across_embedding_indices_collapsed(self):
+        # Same performer has two separate embedding entries in the index
+        # (e.g. two training crops) at different idx -- both can rank in
+        # top-K independently. Only the better-scoring one should survive,
+        # not two entries for the same person.
+        fn = self._make_result(ModelHealth.HEALTHY, [0, 1], [0.35, 0.30])
+        af = self._make_result(ModelHealth.HEALTHY, [0, 1], [0.35, 0.30])
+        faces = ["stashdb.org:uuid-0", "stashdb.org:uuid-0"]  # both idx -> same performer
+        performers = {"stashdb.org:uuid-0": {"name": "Performer 0"}}
+
+        result = fuse_results(fn, af, faces, performers)
+
+        assert len(result.matches) == 1
+        assert result.matches[0].universal_id == "stashdb.org:uuid-0"
+        assert result.matches[0].combined_distance == pytest.approx(0.30)
+
 
 class TestMergeLocalCandidates:
     """A local performer with a linked StashDB id who also shows up as a
