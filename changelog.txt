@@ -1,5 +1,13 @@
 ## 2026-08-21
 
+### 0.13.2
+- Fix: The image-identify flow now also shows "Add to Stash + Image" and
+  "Add as..." buttons for a match not yet in the library, completing the
+  0.13.1 fix which only covered frame/select-to-identify. The sidecar's
+  create/link-performer operations previously only knew how to attach a
+  performer to a scene; they now accept an image_id alongside scene_id
+  and update the image's performer list directly.
+
 ### 0.13.1
 - Fix: The "Identify current frame" / "Select to identify" / image-identify
   flows now show "Add to Stash + Scene" and "Add as..." buttons for a match
